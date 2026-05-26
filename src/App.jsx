@@ -347,16 +347,50 @@ function LoginScreen({onAuth}){
 }
 
 /* ─── Dashboard ─── */
-function Dashboard({pdvs,results,period}) {
+function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMap}) {
+  const [compPeriods,setCompPeriods]=useState([]);
+  const [compData,setCompData]=useState({});
+  const [loadingComp,setLoadingComp]=useState(false);
+
   const tot=results.reduce((s,r)=>s+(r.total||0),0);
   const totE=results.reduce((s,r)=>s+(r.energyBill||0),0);
   const totP=results.reduce((s,r)=>s+(r.pctRevenue||0),0);
   const byType={};
   pdvs.forEach(p=>{if(p.contract_type!=="Boleto")byType[p.contract_type]=(byType[p.contract_type]||0)+1;});
   const active=pdvs.filter(p=>p.contract_type!=="Boleto").length;
+
+  async function togglePeriod(p){
+    const id=p.id;
+    if(compPeriods.find(x=>x.id===id)){
+      setCompPeriods(compPeriods.filter(x=>x.id!==id));
+      const nd={...compData};delete nd[id];setCompData(nd);
+      return;
+    }
+    setLoadingComp(true);
+    try{
+      const res=await onLoadPeriodResults(id);
+      setCompPeriods([...compPeriods,p]);
+      setCompData({...compData,[id]:res});
+    }catch(e){console.error(e);}
+    setLoadingComp(false);
+  }
+
+  // Build comparison table data
+  const selPeriods=compPeriods;
+  const allPdvNames=[...new Set(pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>({id:p.id,name:p.name})))];
+  const compRows=allPdvNames.map(({id,name})=>{
+    const row={id,name};
+    selPeriods.forEach(p=>{
+      const pRes=compData[p.id]||[];
+      const r=pRes.find(x=>x.id===id);
+      row[p.id]=r?.total||0;
+    });
+    return row;
+  }).filter(row=>selPeriods.some(p=>row[p.id]>0));
+
   return <div className="fade-in">
     <div className="h2">Dashboard</div>
-    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Período: <strong>{period||"Não definido"}</strong></div>
+    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Período ativo: <strong>{period||"Não definido"}</strong></div>
     <div className="grid4" style={{marginBottom:16}}>
       <Stat val={fmt(tot)} label="Total repasse" color="#00314f"/>
       <Stat val={active} label="PDVs ativos" color="#9bf400"/>
@@ -379,6 +413,37 @@ function Dashboard({pdvs,results,period}) {
         <td><span className="chip">{r.contract_type}</span></td>
         <td className="mono" style={{fontWeight:700}}>{fmt(r.total)}</td></tr>
       )}</tbody></table>
+    </div>}
+
+    {allPeriods&&allPeriods.length>0&&<div className="card">
+      <div className="h3">Comparar períodos</div>
+      <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>Selecione períodos para comparar valores por PDV:</p>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
+        {allPeriods.map(p=>{const sel=compPeriods.find(x=>x.id===p.id);
+          return <div key={p.id} onClick={()=>togglePeriod(p)} style={{padding:"5px 12px",borderRadius:8,cursor:"pointer",fontSize:12,
+            fontWeight:sel?700:400,background:sel?"var(--accent)":"var(--color-background-secondary)",
+            color:sel?"#fff":"var(--color-text-secondary)",border:sel?"none":"1px solid var(--color-border-tertiary)",
+            transition:"all 0.12s"}}>{p.nome}</div>;})}
+      </div>
+      {loadingComp&&<div style={{fontSize:12,color:"var(--color-text-secondary)",padding:10}}>Carregando...</div>}
+      {selPeriods.length>0&&compRows.length>0&&<div className="scroll-x"><table>
+        <thead><tr><th>PDV</th>{selPeriods.map(p=><th key={p.id} className="mono" style={{textAlign:"right"}}>{p.nome}</th>)}</tr></thead>
+        <tbody>
+          {compRows.sort((a,b)=>{const last=selPeriods[selPeriods.length-1]?.id;return (b[last]||0)-(a[last]||0);}).map(row=>
+            <tr key={row.id}><td className="trunc" style={{fontWeight:500}}>{row.name}</td>
+              {selPeriods.map(p=><td key={p.id} className="mono" style={{textAlign:"right",fontWeight:600,
+                color:row[p.id]>0?"inherit":"var(--color-text-tertiary)"}}>{row[p.id]>0?fmt(row[p.id]):"-"}</td>)}
+            </tr>
+          )}
+          <tr style={{fontWeight:700,borderTop:"2px solid var(--color-border-secondary)"}}>
+            <td style={{textAlign:"right"}}>TOTAL</td>
+            {selPeriods.map(p=><td key={p.id} className="mono" style={{textAlign:"right",color:"var(--accent)",fontSize:13}}>
+              {fmt(compRows.reduce((s,r)=>s+(r[p.id]||0),0))}</td>)}
+          </tr>
+        </tbody>
+      </table></div>}
+      {selPeriods.length>0&&compRows.length===0&&<div className="empty">Nenhum resultado calculado nos períodos selecionados</div>}
+      {selPeriods.length===0&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",textAlign:"center",padding:16}}>Clique nos períodos acima para comparar</div>}
     </div>}
   </div>;
 }
@@ -524,12 +589,22 @@ function DataEntry({pdvs,md,setMd,period,save}) {
     const lines=paste.trim().split("\n");
     const u={...md};let matched=0,skipped=0;
     lines.forEach(line=>{
-      const cols=line.split("\t");if(cols.length<3)return;
-      const c0=cols[0]?.trim().toLowerCase();
-      if(c0.includes("data")||c0.includes("pdv")||c0.includes("hora")||c0==="")return;
-      let name=cols[1]?.trim();let val=parseBR(cols[2]);
-      if(!isNaN(parseFloat(name))&&val===0){val=parseBR(name);name=cols[0]?.trim();}
-      if(val<=0){skipped++;return;}
+      const cols=line.split("\t");
+      if(cols.length<2)return;
+      let name,val;
+      if(cols.length>=3){
+        // 3+ cols: Date | Name | Value | Photo (original format)
+        const c0=cols[0]?.trim().toLowerCase();
+        if(c0.includes("data")||c0.includes("pdv")||c0.includes("hora")||c0==="")return;
+        name=cols[1]?.trim();val=parseBR(cols[2]);
+        if(!isNaN(parseFloat(name))&&val===0){val=parseBR(name);name=cols[0]?.trim();}
+      }else{
+        // 2 cols: Name | Value
+        const c0=cols[0]?.trim().toLowerCase();
+        if(c0.includes("data")||c0.includes("pdv")||c0.includes("hora")||c0.includes("local")||c0==="")return;
+        name=cols[0]?.trim();val=parseBR(cols[1]);
+      }
+      if(!val||val<=0){skipped++;return;}
       const mp=findPdv(name);
       if(mp){u[mp.id]={...(u[mp.id]||{}),[type]:val};matched++;}
       else{skipped++;}
@@ -1152,7 +1227,8 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,savePdvs,saveMd,onDirty,use
 }
 
 /* ─── Histórico de Períodos ─── */
-function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdatePeriod}) {
+function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdatePeriod,userRole}) {
+  const canManage=userRole?.role==="master"||userRole?.role==="admin";
   const [showNew,setShowNew]=useState(false);
   const [newNome,setNewNome]=useState("");
   const [newMes,setNewMes]=useState(new Date().getMonth()+1);
@@ -1179,10 +1255,10 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
     {confirm&&<ConfirmModal msg={confirm.msg} detail={confirm.detail} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div className="h2">Histórico de períodos</div>
-      <button className="btn btn-p" onClick={()=>setShowNew(!showNew)}>+ Novo período</button>
+      {canManage&&<button className="btn btn-p" onClick={()=>setShowNew(!showNew)}>+ Novo período</button>}
     </div>
 
-    {showNew&&<div className="card fade-in" style={{border:"2px solid var(--accent)",marginBottom:16}}>
+    {showNew&&canManage&&<div className="card fade-in" style={{border:"2px solid var(--accent)",marginBottom:16}}>
       <div className="h3">Criar novo período</div>
       <div className="grid3">
         <Field label="Mês"><select value={newMes} onChange={e=>setNewMes(parseInt(e.target.value))}>
@@ -1205,7 +1281,7 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
         </div>
         {statusPeriodo(activePeriod)}
       </div>
-      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+      {canManage&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {activePeriod.status_dia20==="pendente"&&<button className="btn btn-o"
           onClick={()=>confirmAction("Entregar dia 20?",`Marcar dia 20 do período "${activePeriod.nome}" como entregue.`,
             ()=>onUpdatePeriod(activePeriod.id,{status_dia20:"entregue",data_entrega_dia20:new Date().toISOString()}))}>
@@ -1219,7 +1295,7 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
             onClick={()=>confirmAction("Fechar período?",`Fechar "${activePeriod.nome}" definitivamente. Dados viram histórico consultável.`,
               ()=>onUpdatePeriod(activePeriod.id,{status:"fechado"}))}>
             🔒 Fechar período</button>}
-      </div>
+      </div>}
     </div>}
 
     <div className="card">
@@ -1297,6 +1373,7 @@ function AdminPanel({userRole,onRefresh}){
       <div className={`tab ${tab==="requests"?"active":""}`} onClick={()=>setTab("requests")}>
         Solicitações{pendingCount>0&&<span className="badge badge-danger" style={{marginLeft:6}}>{pendingCount}</span>}
       </div>
+      <div className={`tab ${tab==="perms"?"active":""}`} onClick={()=>setTab("perms")}>Permissões</div>
     </div>
 
     {tab==="users"&&<>
@@ -1351,6 +1428,25 @@ function AdminPanel({userRole,onRefresh}){
           </>}</td>
         </tr>)}</tbody></table></div></div>}
     </>}
+
+    {tab==="perms"&&<div className="card">
+      <div className="h3">O que cada cargo pode fazer</div>
+      <div className="scroll-x"><table>
+        <thead><tr><th style={{minWidth:220}}>Funcionalidade</th><th style={{textAlign:"center"}}>⭐ Master</th><th style={{textAlign:"center"}}>🔧 Admin</th><th style={{textAlign:"center"}}>👤 Usuário</th><th style={{textAlign:"center"}}>👁 View</th></tr></thead>
+        <tbody>
+          {[["Dashboard — visualizar","✓","✓","✓","✓"],["Administração — gerenciar usuários","✓","✗","✗","✗"],
+            ["Aprovar/rejeitar solicitações","✓","✗","✗","✗"],["Histórico — ver períodos","✓","✓","✓","✓"],
+            ["Histórico — criar/entregar/fechar","✓","✓","✗","✗"],["Cadastro de PDVs","✓","✓","✗","✗"],
+            ["Entrada de dados (importar)","✓","✓","✗","✗"],["Pendências — corrigir direto","✓","✓","✗","✗"],
+            ["Pendências — solicitar alteração","—","—","✓","✗"],["Calcular repasse","✓","✓","✗","✗"],
+            ["Demonstrativo — editar direto","✓","✓","✗","✗"],["Demonstrativo — solicitar alteração","—","—","✓","✗"],
+            ["Financeiro (relatório + CSV)","✓","✓","✗","✗"]
+          ].map(([f,...perms],i)=><tr key={i}><td style={{fontWeight:500,fontSize:12}}>{f}</td>
+            {perms.map((p,j)=><td key={j} style={{textAlign:"center",fontSize:14,
+              color:p==="✓"?"#3d7a00":p==="✗"?"#ccc":"#ff8b00",fontWeight:700}}>{p}</td>)}</tr>)}
+        </tbody>
+      </table></div>
+    </div>}
   </div>;
 }
 
@@ -1551,10 +1647,11 @@ export default function App() {
   const allNav=[
     ["dashboard","◫","Dashboard",["master","admin","usuario","view"]],
     ["admin","⚙","Administração",["master"]],
-    ["historico","⏱","Histórico",["master","admin"]],
-    ["pendencias","⚑","Pendências",["master","admin","usuario"]],
+    ["---","","Passo a passo do repasse",["master","admin"]],
+    ["historico","⏱","Histórico",["master","admin","usuario","view"]],
     ["pdvs","⊞","Cadastro PDVs",["master","admin"]],
     ["entrada","⇥","Entrada dados",["master","admin"]],
+    ["pendencias","⚑","Pendências",["master","admin","usuario"]],
     ["calcular","≡","Calcular",["master","admin"]],
     ["demo","☷","Demonstrativo",["master","admin","usuario"]],
     ["fin","$","Financeiro",["master","admin"]],
@@ -1574,8 +1671,10 @@ export default function App() {
           <img src={LOGO_SVG} alt="Roda" style={{height:90}}/>
           <span style={{fontSize:11,fontWeight:500,letterSpacing:"2px",color:"rgba(255,255,255,0.45)",textTransform:"uppercase"}}>repasse</span>
         </div>
-        {nav.map(([k,ic,lb])=>
-          <div key={k} className={`nav-item ${page===k?"active":""}`} onClick={()=>tryNavigate(k)}>
+        {nav.map(([k,ic,lb],i)=>
+          k==="---"?<div key={`div-${i}`} style={{padding:"12px 16px 4px",fontSize:9,fontWeight:700,letterSpacing:"1.5px",
+            textTransform:"uppercase",color:"rgba(255,255,255,0.3)",borderTop:"1px solid rgba(255,255,255,0.08)",marginTop:6}}>{lb}</div>
+          :<div key={k} className={`nav-item ${page===k?"active":""}`} onClick={()=>tryNavigate(k)}>
             <span style={{fontSize:15,width:18,textAlign:"center"}}>{ic}</span>{lb}
           </div>
         )}
@@ -1590,10 +1689,15 @@ export default function App() {
         </div>
       </div>
       <div className="main">
-        {page==="dashboard"&&<Dashboard pdvs={pdvs} results={results} period={period}/>}
+        {page==="dashboard"&&<Dashboard pdvs={pdvs} results={results} period={period}
+          allPeriods={allPeriods} revUuidMap={revUuidMap}
+          onLoadPeriodResults={async(pid)=>{
+            const res=await SB.loadResults(pid,revUuidMap);
+            return res.map(r=>{const p=pdvs.find(x=>x.id===r.id);return {...r,name:p?.name||""};});
+          }}/>}
         {page==="admin"&&role==="master"&&<AdminPanel userRole={userRole}/>}
         {page==="historico"&&<Historico periods={allPeriods} activePeriod={activePeriod}
-          onSelectPeriod={handleSelectPeriod} onCreatePeriod={handleCreatePeriod} onUpdatePeriod={handleUpdatePeriod}/>}
+          onSelectPeriod={handleSelectPeriod} onCreatePeriod={handleCreatePeriod} onUpdatePeriod={handleUpdatePeriod} userRole={userRole}/>}
         {page==="pendencias"&&<Pendencias pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
           savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
           userRole={userRole} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
