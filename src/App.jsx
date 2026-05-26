@@ -995,7 +995,7 @@ function Financeiro({pdvs,setPdvs,results,period,savePdvs,onDirty}) {
 }
 
 /* ─── Demonstrativo ─── */
-function Demonstrativo({pdvs,setPdvs,md,setMd,period,savePdvs,saveMd,onDirty}) {
+function Demonstrativo({pdvs,setPdvs,md,setMd,period,savePdvs,saveMd,onDirty,userRole,onRequestChange}) {
   const [selType,setSelType]=useState(CONTRACT_TYPES[0]);
   const [editMode,setEditMode]=useState(false);
   const [localMd,setLocalMd]=useState({});
@@ -1019,21 +1019,41 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,savePdvs,saveMd,onDirty}) {
   function editPdvField(pid,field,val){setLocalPdvEdits(o=>({...o,[pid]:{...(o[pid]||{}),[field]:parseFloat(val)||0}}));setChangeCount(c=>c+1);}
   function getPdv(p){return {...p,...(localPdvEdits[p.id]||{})};}
 
+  const isUsuario=userRole?.role==="usuario";
+
   function requestSave(){
-    const changes=[];
-    typePdvs.forEach(p=>{const origMd=md[p.id]||{},newMd=localMd[p.id]||{},pe=localPdvEdits[p.id]||{};const fields=[];
-      if((newMd.meter_start||0)!==(origMd.meter_start||0))fields.push(`Med.início: ${origMd.meter_start||0} → ${newMd.meter_start||0}`);
-      if((newMd.meter_end||0)!==(origMd.meter_end||0))fields.push(`Med.fim: ${origMd.meter_end||0} → ${newMd.meter_end||0}`);
-      if((newMd.raw_revenue||0)!==(origMd.raw_revenue||0))fields.push(`Fat: ${origMd.raw_revenue||0} → ${newMd.raw_revenue||0}`);
-      if((newMd.manual_adjustment||0)!==(origMd.manual_adjustment||0))fields.push(`Ajuste: ${origMd.manual_adjustment||0} → ${newMd.manual_adjustment||0}`);
-      if((newMd.energy_bill_cond||0)!==(origMd.energy_bill_cond||0))fields.push(`Conta: ${origMd.energy_bill_cond||0} → ${newMd.energy_bill_cond||0}`);
-      Object.entries(pe).forEach(([k,v])=>{if(v!==p[k])fields.push(`${k}: ${p[k]} → ${v} (base)`);});
-      if(fields.length>0)changes.push(`${p.name}:\n  ${fields.join("\n  ")}`);});
+    const changes=[];const changeReqs=[];
+    typePdvs.forEach(p=>{const origMd=md[p.id]||{},newMd=localMd[p.id]||{},pe=localPdvEdits[p.id]||{};
+      const mdFields=[["meter_start","Med.início"],["meter_end","Med.fim"],["raw_revenue","Fat"],["manual_adjustment","Ajuste"],["energy_bill_cond","Conta"]];
+      mdFields.forEach(([k,label])=>{
+        if((newMd[k]||0)!==(origMd[k]||0)){
+          changes.push(`${p.name}: ${label}: ${origMd[k]||0} → ${newMd[k]||0}`);
+          changeReqs.push({tipo:"md_edit",pdv_vmpay_id:p.id,pdv_nome:p.name,campo:k,
+            valor_atual:String(origMd[k]||0),valor_novo:String(newMd[k]||0),
+            requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",requester_id:userRole?.user_id||null});
+        }
+      });
+      Object.entries(pe).forEach(([k,v])=>{if(v!==p[k]){
+        changes.push(`${p.name}: ${k}: ${p[k]} → ${v} (base)`);
+        changeReqs.push({tipo:"pdv_edit",pdv_vmpay_id:p.id,pdv_nome:p.name,campo:k,
+          valor_atual:String(p[k]||""),valor_novo:String(v),
+          requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",requester_id:userRole?.user_id||null});
+      }});
+    });
     if(changes.length===0){setEditMode(false);return;}
-    setConfirm({msg:`${changes.length} PDV(s) serão alterados:`,detail:changes.join("\n\n"),onConfirm:()=>{
-      const newMdAll={...md};Object.entries(localMd).forEach(([pid,data])=>{newMdAll[pid]={...(newMdAll[pid]||{}),...data};});setMd(newMdAll);saveMd(newMdAll);
-      if(Object.keys(localPdvEdits).length>0){const np=pdvs.map(p=>{const e=localPdvEdits[p.id];return e?{...p,...e}:p;});setPdvs(np);savePdvs(np);}
-      setConfirm(null);setEditMode(false);setChangeCount(0);}});
+
+    if(isUsuario&&onRequestChange){
+      setConfirm({msg:`Enviar ${changeReqs.length} solicitação(ões)?`,detail:changes.join("\n"),onConfirm:async()=>{
+        try{for(const r of changeReqs) await onRequestChange(r);
+          alert("Solicitações enviadas! Aguarde aprovação do administrador.");
+        }catch(e){alert("Erro: "+e.message);}
+        setConfirm(null);setEditMode(false);setChangeCount(0);}});
+    }else{
+      setConfirm({msg:`${changes.length} PDV(s) serão alterados:`,detail:changes.join("\n"),onConfirm:()=>{
+        const newMdAll={...md};Object.entries(localMd).forEach(([pid,data])=>{newMdAll[pid]={...(newMdAll[pid]||{}),...data};});setMd(newMdAll);saveMd(newMdAll);
+        if(Object.keys(localPdvEdits).length>0){const np=pdvs.map(p=>{const e=localPdvEdits[p.id];return e?{...p,...e}:p;});setPdvs(np);savePdvs(np);}
+        setConfirm(null);setEditMode(false);setChangeCount(0);}});
+    }
   }
 
   const rows=typePdvs.map(p=>{const ep=editMode?getPdv(p):p;const d=editMode?(localMd[p.id]||{}):(md[p.id]||{});
@@ -1065,9 +1085,9 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,savePdvs,saveMd,onDirty}) {
       <div className="h2">Demonstrativo por tipo</div>
       <div style={{display:"flex",gap:8,alignItems:"center"}}>
         {editMode&&changeCount>0&&<span style={{fontSize:11,color:"var(--warn)",fontWeight:600}}>{changeCount} alteração(ões)</span>}
-        {editMode?<><button className="btn btn-p" onClick={requestSave}>✓ Salvar</button>
+        {editMode?<><button className="btn btn-p" onClick={requestSave}>{isUsuario?"📩 Enviar solicitação":"✓ Salvar"}</button>
           <button className="btn btn-s" onClick={()=>{setEditMode(false);setChangeCount(0);}}>✕ Cancelar</button></>
-          :<button className="btn btn-s" onClick={()=>setEditMode(true)} style={{border:"1.5px dashed var(--accent)",color:"var(--accent)"}}>✎ Editar valores</button>}
+          :<button className="btn btn-s" onClick={()=>setEditMode(true)} style={{border:"1.5px dashed var(--accent)",color:"var(--accent)"}}>{isUsuario?"📩 Solicitar alteração":"✎ Editar valores"}</button>}
       </div>
     </div>
     <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Período: <strong>{period||"—"}</strong></div>
@@ -1548,7 +1568,7 @@ export default function App() {
       detail="Se trocar de página agora, suas edições serão perdidas."
       onConfirm={()=>{setDirty(0);setPage(pendingNav);setPendingNav(null);}}
       onCancel={()=>setPendingNav(null)}/>}
-    <div className="app">
+    <div className="app" lang="en">
       <div className="side">
         <div className="logo" style={{flexDirection:"column",alignItems:"center",padding:"10px 16px 12px",gap:1}}>
           <img src={LOGO_SVG} alt="Roda" style={{height:90}}/>
@@ -1581,7 +1601,8 @@ export default function App() {
         {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB}/>}
         {page==="calcular"&&<CalcResults pdvs={pdvs} md={md} results={results} setResults={setResults} save={saveResultsToSB} period={period}/>}
         {page==="demo"&&<Demonstrativo pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave} period={period}
-          savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}/>}
+          savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
+          userRole={userRole} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
         {page==="fin"&&<Financeiro pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} results={results} period={period}
           savePdvs={canEdit?savePdvsToSB:noSave} onDirty={setDirty}/>}
       </div>
