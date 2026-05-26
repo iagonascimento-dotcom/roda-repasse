@@ -11,8 +11,8 @@ const REV_TYPES = ["Líquido","Bruto"];
 const LIQ = 0.87;
 
 /* ─── Supabase REST adapter ─── */
-const SB_URL = "https://qqwcouliayxvkusyqqxe.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFxd2NvdWxpYXl4dmt1c3lxcXhlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNzQ5ODAsImV4cCI6MjA4ODc1MDk4MH0.gQlY8LHOYIuns5_T8UhqMQv4M7B8XObhd4opCFm9Be0";
+const SB_URL = "https://nssjemcdifdkxfhzukmz.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zc2plbWNkaWZka3hmaHp1a216Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MjAxNzcsImV4cCI6MjA5NTM5NjE3N30.HYHSc7xaQgKzLGkDqJ3uOdOYHRzaaRLrGLu21ceOdhY";
 
 const SB = {
   token: null,
@@ -106,7 +106,7 @@ const SB = {
       raw_revenue:data.raw_revenue||0,manual_adjustment:data.manual_adjustment||0,
       manual_adjustment_desc:data.manual_adjustment_desc||"",
       energy_bill_cond:data.energy_bill_cond||0,updated_at:new Date().toISOString()};
-    await this.api("/rest/v1/dados_mensais",{method:"POST",body:JSON.stringify(body),
+    await this.api("/rest/v1/dados_mensais?on_conflict=periodo_id,pdv_id",{method:"POST",body:JSON.stringify(body),
       headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
   },
   async bulkUpsertMonthly(periodoId,records){
@@ -116,8 +116,7 @@ const SB = {
       raw_revenue:r.data.raw_revenue||0,manual_adjustment:r.data.manual_adjustment||0,
       manual_adjustment_desc:r.data.manual_adjustment_desc||"",
       energy_bill_cond:r.data.energy_bill_cond||0,updated_at:new Date().toISOString()}));
-    // PostgREST supports bulk POST with array body
-    await this.api("/rest/v1/dados_mensais",{method:"POST",body:JSON.stringify(body),
+    await this.api("/rest/v1/dados_mensais?on_conflict=periodo_id,pdv_id",{method:"POST",body:JSON.stringify(body),
       headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
   },
   /* Results */
@@ -1669,8 +1668,11 @@ export default function App() {
   }
 
   async function logout(){
-    await tokenClear();SB.token=null;setAuthed(false);setReady(false);setAuthLoading(false);
-    setUserRole(null);setAuthEmail("");
+    try{await tokenClear();}catch{}
+    try{localStorage.clear();}catch{}
+    SB.token=null;setAuthed(false);setReady(false);setAuthLoading(false);
+    setUserRole(null);setAuthEmail("");setPdvs([]);setMd({});setResults([]);
+    setActivePeriod(null);setAllPeriods([]);
   }
 
   /* ─── Render ─── */
