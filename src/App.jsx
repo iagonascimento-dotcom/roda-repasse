@@ -499,8 +499,16 @@ function DataEntry({pdvs,md,setMd,period,save}) {
   function parseBR(s){
     if(!s)return 0;
     const clean=s.toString().trim().replace(/[R$\s]/g,"");
+    // Both dot and comma: "15.510,20" → dot=thousands, comma=decimal
     if(clean.includes(".")&&clean.includes(","))return parseFloat(clean.replace(/\./g,"").replace(",","."))||0;
+    // Only comma: "15510,20" → comma=decimal
     if(clean.includes(",")&&!clean.includes("."))return parseFloat(clean.replace(",","."))||0;
+    // Only dot: check if it's thousands separator (3 digits after each dot)
+    if(clean.includes(".")){
+      const parts=clean.split(".");
+      const allThousands=parts.slice(1).every(p=>p.length===3);
+      if(allThousands&&parts.length>1) return parseFloat(clean.replace(/\./g,""))||0;
+    }
     return parseFloat(clean)||0;
   }
 
@@ -708,7 +716,7 @@ function CalcResults({pdvs,md,results,setResults,save,period}) {
 }
 
 /* ─── Pendencias ─── */
-function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty}) {
+function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRequestChange}) {
   const [editMode,setEditMode]=useState(false);
   const [pdvEdits,setPdvEdits]=useState({});
   const [mdEdits,setMdEdits]=useState({});
@@ -772,26 +780,55 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty}) {
     else setPdvEdits(o=>({...o,[pid]:{...(o[pid]||{}),[field]:val}}));
   }
 
+  const isUsuario=userRole?.role==="usuario";
+
   function requestSave(){
     const changes=[];
+    const changeReqs=[];
     Object.entries(pdvEdits).forEach(([pid,fields])=>{
       const p=pdvs.find(x=>x.id===pid);if(!p)return;
-      const diffs=Object.entries(fields).filter(([k,v])=>String(v)!==String(p[k]||"")).map(([k,v])=>`${k}: ${p[k]||"(vazio)"} → ${v}`);
-      if(diffs.length) changes.push(`${p.name} (base):\n  ${diffs.join("\n  ")}`);
+      Object.entries(fields).forEach(([k,v])=>{
+        if(String(v)!==String(p[k]||"")){
+          changes.push(`${p.name}: ${k}: ${p[k]||"(vazio)"} → ${v}`);
+          changeReqs.push({tipo:"pdv_edit",pdv_vmpay_id:p.id,pdv_nome:p.name,campo:k,
+            valor_atual:String(p[k]||""),valor_novo:String(v),
+            requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",
+            requester_id:userRole?.user_id||null});
+        }
+      });
     });
     Object.entries(mdEdits).forEach(([pid,fields])=>{
       const p=pdvs.find(x=>x.id===pid);if(!p)return;const old=md[pid]||{};
-      const diffs=Object.entries(fields).filter(([k,v])=>v!==(old[k]||0)).map(([k,v])=>`${k}: ${old[k]||0} → ${v}`);
-      if(diffs.length) changes.push(`${p.name} (mensal):\n  ${diffs.join("\n  ")}`);
+      Object.entries(fields).forEach(([k,v])=>{
+        if(v!==(old[k]||0)){
+          changes.push(`${p.name}: ${k}: ${old[k]||0} → ${v}`);
+          changeReqs.push({tipo:"md_edit",pdv_vmpay_id:p.id,pdv_nome:p.name,campo:k,
+            valor_atual:String(old[k]||0),valor_novo:String(v),
+            requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",
+            requester_id:userRole?.user_id||null});
+        }
+      });
     });
     if(changes.length===0){setEditMode(false);setPdvEdits({});setMdEdits({});return;}
-    setConfirm({msg:`${changes.length} PDV(s) serão alterados:`,detail:changes.join("\n\n"),
-      onConfirm:()=>{
-        if(Object.keys(pdvEdits).length){const np=pdvs.map(p=>pdvEdits[p.id]?{...p,...pdvEdits[p.id]}:p);setPdvs(np);savePdvs(np);}
-        if(Object.keys(mdEdits).length){const nm={...md};Object.entries(mdEdits).forEach(([pid,d])=>{nm[pid]={...(nm[pid]||{}),...d};});setMd(nm);saveMd(nm);}
-        setConfirm(null);setEditMode(false);setPdvEdits({});setMdEdits({});
-      }
-    });
+
+    if(isUsuario&&onRequestChange){
+      setConfirm({msg:`Enviar ${changeReqs.length} solicitação(ões) de alteração?`,detail:changes.join("\n"),
+        onConfirm:async()=>{
+          try{for(const r of changeReqs) await onRequestChange(r);
+            alert("Solicitações enviadas! Aguarde aprovação do administrador.");
+          }catch(e){alert("Erro: "+e.message);}
+          setConfirm(null);setEditMode(false);setPdvEdits({});setMdEdits({});
+        }
+      });
+    }else{
+      setConfirm({msg:`${changes.length} PDV(s) serão alterados:`,detail:changes.join("\n"),
+        onConfirm:()=>{
+          if(Object.keys(pdvEdits).length){const np=pdvs.map(p=>pdvEdits[p.id]?{...p,...pdvEdits[p.id]}:p);setPdvs(np);savePdvs(np);}
+          if(Object.keys(mdEdits).length){const nm={...md};Object.entries(mdEdits).forEach(([pid,d])=>{nm[pid]={...(nm[pid]||{}),...d};});setMd(nm);saveMd(nm);}
+          setConfirm(null);setEditMode(false);setPdvEdits({});setMdEdits({});
+        }
+      });
+    }
   }
 
   const eStyle={padding:"3px 6px",fontSize:12,borderRadius:5,border:"1.5px solid var(--accent)",background:"#fffbe6"};
@@ -803,9 +840,9 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty}) {
       <div style={{display:"flex",gap:8,alignItems:"center"}}>
         {editMode&&changeCount>0&&<span style={{fontSize:11,color:"var(--warn)",fontWeight:600}}>{changeCount} alteração(ões)</span>}
         {editMode?<>
-          <button className="btn btn-p" onClick={requestSave}>✓ Salvar na base</button>
+          <button className="btn btn-p" onClick={requestSave}>{isUsuario?"📩 Enviar solicitação":"✓ Salvar na base"}</button>
           <button className="btn btn-s" onClick={()=>{setEditMode(false);setPdvEdits({});setMdEdits({});}}>✕ Cancelar</button>
-        </>:<button className="btn btn-s" onClick={()=>setEditMode(true)} style={{border:"1.5px dashed var(--accent)",color:"var(--accent)"}}>✎ Corrigir pendências</button>}
+        </>:<button className="btn btn-s" onClick={()=>setEditMode(true)} style={{border:"1.5px dashed var(--accent)",color:"var(--accent)"}}>{isUsuario?"📩 Solicitar alteração":"✎ Corrigir pendências"}</button>}
       </div>
     </div>
     {totalIssues===0?<div className="card" style={{textAlign:"center",padding:40}}>
@@ -1538,7 +1575,8 @@ export default function App() {
         {page==="historico"&&<Historico periods={allPeriods} activePeriod={activePeriod}
           onSelectPeriod={handleSelectPeriod} onCreatePeriod={handleCreatePeriod} onUpdatePeriod={handleUpdatePeriod}/>}
         {page==="pendencias"&&<Pendencias pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
-          savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}/>}
+          savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
+          userRole={userRole} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
         {page==="pdvs"&&<PdvManager pdvs={pdvs} setPdvs={setPdvs} save={savePdvsToSB}/>}
         {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB}/>}
         {page==="calcular"&&<CalcResults pdvs={pdvs} md={md} results={results} setResults={setResults} save={saveResultsToSB} period={period}/>}
