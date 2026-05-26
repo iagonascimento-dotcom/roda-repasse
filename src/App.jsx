@@ -109,6 +109,17 @@ const SB = {
     await this.api("/rest/v1/dados_mensais",{method:"POST",body:JSON.stringify(body),
       headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
   },
+  async bulkUpsertMonthly(periodoId,records){
+    if(!records.length)return;
+    const body=records.map(r=>({periodo_id:periodoId,pdv_id:r.pdvUuid,
+      meter_start:r.data.meter_start||0,meter_end:r.data.meter_end||0,
+      raw_revenue:r.data.raw_revenue||0,manual_adjustment:r.data.manual_adjustment||0,
+      manual_adjustment_desc:r.data.manual_adjustment_desc||"",
+      energy_bill_cond:r.data.energy_bill_cond||0,updated_at:new Date().toISOString()}));
+    // PostgREST supports bulk POST with array body
+    await this.api("/rest/v1/dados_mensais",{method:"POST",body:JSON.stringify(body),
+      headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
+  },
   /* Results */
   async loadResults(periodoId,pdvMap){
     const rows=await this.api(`/rest/v1/resultados?select=*&periodo_id=eq.${periodoId}`);
@@ -541,6 +552,13 @@ function PdvForm({pdv,onSave,onCancel}) {
 function DataEntry({pdvs,md,setMd,period,save}) {
   const [tab,setTab]=useState("meters");
   const [paste,setPaste]=useState("");
+  const [localMd,setLocalMd]=useState(md);
+  const [dirty,setDirty]=useState(0);
+  const [saving,setSaving]=useState(false);
+  const [lastSave,setLastSave]=useState("");
+
+  // Sync localMd when md changes externally (e.g. period switch)
+  useEffect(()=>{setLocalMd(md);setDirty(0);},[md]);
 
   const needsMeter=ct=>["Medidor","Medidor + Mínimo","Medidor + Percentual de Faturamento",
     "Medidor OU Percentual de Faturamento","Medidor OU Percentual de Faturamento OU Mínimo"].includes(ct);
@@ -552,13 +570,26 @@ function DataEntry({pdvs,md,setMd,period,save}) {
   const mPdvs=pdvs.filter(p=>needsMeter(p.contract_type));
   const rPdvs=pdvs.filter(p=>needsRev(p.contract_type));
 
+  // Local edit functions (no save, just state)
   function upd(pid,field,val){
-    const u={...md,[pid]:{...(md[pid]||{}),[field]:parseFloat(val)||0}};
-    setMd(u);save(u);
+    setLocalMd(o=>({...o,[pid]:{...(o[pid]||{}),[field]:parseFloat(val)||0}}));
+    setDirty(d=>d+1);
   }
   function updStr(pid,field,val){
-    const u={...md,[pid]:{...(md[pid]||{}),[field]:val}};
-    setMd(u);save(u);
+    setLocalMd(o=>({...o,[pid]:{...(o[pid]||{}),[field]:val}}));
+    setDirty(d=>d+1);
+  }
+
+  // Explicit save to Supabase
+  async function saveAll(){
+    setSaving(true);
+    try{
+      setMd(localMd);
+      await save(localMd);
+      setDirty(0);
+      setLastSave(new Date().toLocaleTimeString("pt-BR"));
+    }catch(e){alert("Erro ao salvar: "+e.message);}
+    setSaving(false);
   }
 
   function parseBR(s){
@@ -585,9 +616,9 @@ function DataEntry({pdvs,md,setMd,period,save}) {
       || pdvs.find(p=>p.id===name.trim());
   }
 
-  function importMeters(type){
+  async function importMeters(type){
     const lines=paste.trim().split("\n");
-    const u={...md};let matched=0,skipped=0;
+    const u={...localMd};let matched=0,skipped=0;
     lines.forEach(line=>{
       const cols=line.split("\t");
       if(cols.length<2)return;
@@ -609,13 +640,15 @@ function DataEntry({pdvs,md,setMd,period,save}) {
       if(mp){u[mp.id]={...(u[mp.id]||{}),[type]:val};matched++;}
       else{skipped++;}
     });
-    setMd(u);save(u);setPaste("");
-    alert(`Importado! ${matched} PDVs atualizados, ${skipped} linhas ignoradas.`);
+    if(matched===0){alert(`Nenhum PDV encontrado! ${skipped} linhas não combinaram. Verifique se os nomes batem.`);return;}
+    setLocalMd(u);setMd(u);setPaste("");setDirty(0);
+    try{await save(u);setLastSave(new Date().toLocaleTimeString("pt-BR"));alert(`✓ ${matched} PDVs salvos no banco! (${skipped} ignoradas)`);}
+    catch(e){alert(`Importou ${matched} PDVs mas erro ao salvar: ${e.message}`);}
   }
 
-  function importRevenue(){
+  async function importRevenue(){
     const lines=paste.trim().split("\n");
-    const u={...md};let matched=0,skipped=0;
+    const u={...localMd};let matched=0,skipped=0;
     for(let i=0;i<lines.length;i++){
       const cols=lines[i].split("\t");if(cols.length<2)continue;
       const name=cols[0]?.trim();const nl=name?.toLowerCase()||"";
@@ -629,14 +662,22 @@ function DataEntry({pdvs,md,setMd,period,save}) {
       if(mp&&rev>0){u[mp.id]={...(u[mp.id]||{}),raw_revenue:rev};matched++;}
       else if(rev>0){skipped++;}
     }
-    setMd(u);save(u);setPaste("");
-    alert(`Importado! ${matched} PDVs com faturamento atualizado, ${skipped} não encontrados.`);
+    if(matched===0){alert(`Nenhum PDV encontrado! ${skipped} não combinaram.`);return;}
+    setLocalMd(u);setMd(u);setPaste("");setDirty(0);
+    try{await save(u);setLastSave(new Date().toLocaleTimeString("pt-BR"));alert(`✓ ${matched} PDVs com faturamento salvos no banco! (${skipped} não encontrados)`);}
+    catch(e){alert(`Importou ${matched} PDVs mas erro ao salvar: ${e.message}`);}
   }
 
   return <div className="fade-in">
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div className="h2">Entrada de dados</div>
-      <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>Período: <strong>{period||"Selecione na aba Histórico"}</strong></div>
+      <div style={{display:"flex",gap:10,alignItems:"center"}}>
+        {dirty>0&&<span style={{fontSize:11,color:"var(--warn)",fontWeight:600}}>{dirty} alteração(ões) não salvas</span>}
+        {dirty>0&&<button className="btn btn-p" onClick={saveAll} disabled={saving}>
+          {saving?"Salvando...":"💾 Salvar no banco"}</button>}
+        {lastSave&&dirty===0&&<span style={{fontSize:11,color:"#3d7a00",fontWeight:500}}>✓ Salvo às {lastSave}</span>}
+        <div style={{fontSize:13,color:"var(--color-text-secondary)"}}>Período: <strong>{period||"Selecione na aba Histórico"}</strong></div>
+      </div>
     </div>
     <div className="tabs">
       {[["meters","Medidores ("+mPdvs.length+")"],["revenue","Faturamento ("+rPdvs.length+")"],["adjust","Ajustes"],["energy","Contas energia"]].map(([k,l])=>
@@ -658,7 +699,7 @@ function DataEntry({pdvs,md,setMd,period,save}) {
       <div className="scroll-x"><table><thead><tr>
         <th>PDV</th><th>Início</th><th>Fim</th><th>kWh</th><th>Consumo</th><th>Energia</th>
       </tr></thead><tbody>
-        {mPdvs.map(p=>{const d=md[p.id]||{};const s=d.meter_start||0;const e=d.meter_end||0;
+        {mPdvs.map(p=>{const d=localMd[p.id]||{};const s=d.meter_start||0;const e=d.meter_end||0;
           const c=e-s;const b=c*(p.kwh_unity_price||0);
           return <tr key={p.id}>
             <td className="trunc">{p.name}</td>
@@ -681,7 +722,7 @@ function DataEntry({pdvs,md,setMd,period,save}) {
       <div className="scroll-x"><table><thead><tr>
         <th>PDV</th><th>Tipo</th><th>Fat. bruto</th><th>Receita calc.</th><th>%</th><th>Valor %</th>
       </tr></thead><tbody>
-        {rPdvs.map(p=>{const d=md[p.id]||{};const raw=d.raw_revenue||0;
+        {rPdvs.map(p=>{const d=localMd[p.id]||{};const raw=d.raw_revenue||0;
           const cr=raw*(p.revenue_consideration==="Bruto"?1:LIQ);const pv=cr*(p.negotiated_percentage||0);
           return <tr key={p.id}>
             <td className="trunc">{p.name}</td>
@@ -697,7 +738,7 @@ function DataEntry({pdvs,md,setMd,period,save}) {
     {tab==="adjust"&&<div className="card">
       <div className="h3">Ajustes manuais</div>
       <div className="scroll-x"><table><thead><tr><th>PDV</th><th>Valor</th><th>Descrição</th></tr></thead>
-      <tbody>{pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>{const d=md[p.id]||{};
+      <tbody>{pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>{const d=localMd[p.id]||{};
         return <tr key={p.id}>
           <td className="trunc">{p.name}</td>
           <td><input type="number" style={{width:90}} value={d.manual_adjustment||""} onChange={e=>upd(p.id,"manual_adjustment",e.target.value)}/></td>
@@ -708,7 +749,7 @@ function DataEntry({pdvs,md,setMd,period,save}) {
     {tab==="energy"&&<div className="card">
       <div className="h3">Contas de energia (condominial)</div>
       <table><thead><tr><th>PDV</th><th>Valor conta</th></tr></thead>
-      <tbody>{pdvs.filter(p=>p.contract_type==="Conta de Energia + Percentual do Faturamento").map(p=>{const d=md[p.id]||{};
+      <tbody>{pdvs.filter(p=>p.contract_type==="Conta de Energia + Percentual do Faturamento").map(p=>{const d=localMd[p.id]||{};
         return <tr key={p.id}><td>{p.name}</td>
         <td><input type="number" style={{width:120}} value={d.energy_bill_cond||""} onChange={e=>upd(p.id,"energy_bill_cond",e.target.value)}/></td>
         </tr>;})}</tbody></table>
@@ -1561,13 +1602,24 @@ export default function App() {
 
   async function saveMdToSB(newMd){
     setMd(newMd);
-    if(!activePeriod)return;
+    if(!activePeriod){console.warn("No active period, skipping save");return;}
+    // Collect all changed records for bulk upsert
+    const records=[];
     for(const[pid,data] of Object.entries(newMd)){
-      const old=md[pid];
-      if(!old||JSON.stringify(data)!==JSON.stringify(old)){
-        const puuid=uuidMap[pid];if(!puuid)continue;
-        try{await SB.upsertMonthly(activePeriod.id,puuid,data);}catch(e){console.error("Save MD error:",e);}
-      }
+      const puuid=uuidMap[pid];
+      if(!puuid){continue;}
+      // Always include if has any non-zero data
+      const hasData=(data.meter_start||0)>0||(data.meter_end||0)>0||(data.raw_revenue||0)>0
+        ||(data.manual_adjustment||0)!==0||(data.energy_bill_cond||0)>0;
+      if(hasData) records.push({pdvUuid:puuid,data});
+    }
+    if(records.length===0)return;
+    try{
+      await SB.bulkUpsertMonthly(activePeriod.id,records);
+      console.log(`Saved ${records.length} monthly records to Supabase`);
+    }catch(e){
+      console.error("Bulk save error:",e);
+      alert("Erro ao salvar no banco: "+e.message);
     }
   }
 
