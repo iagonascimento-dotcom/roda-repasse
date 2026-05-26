@@ -29,11 +29,15 @@ const SB = {
   },
   /* Auth */
   async signIn(email,pw){
-    const r=await fetch(`${SB_URL}/auth/v1/token?grant_type=password`,{
-      method:"POST",headers:{"apikey":SB_KEY,"Content-Type":"application/json"},
-      body:JSON.stringify({email,password:pw})});
-    const d=await r.json();
-    if(d.error){
+    let r;
+    try{
+      r=await fetch(`${SB_URL}/auth/v1/token?grant_type=password`,{
+        method:"POST",headers:{"apikey":SB_KEY,"Content-Type":"application/json"},
+        body:JSON.stringify({email,password:pw})});
+    }catch(e){throw new Error("Erro de conexão. Verifique sua internet.");}
+    let d;
+    try{d=await r.json();}catch(e){throw new Error(`Erro do servidor (${r.status}). Tente novamente.`);}
+    if(!r.ok||d.error){
       const msg=(d.error_description||d.msg||d.error||"").toLowerCase();
       if(msg.includes("invalid login")||msg.includes("invalid credentials"))
         throw new Error("Email ou senha incorretos. Verifique seus dados ou solicite acesso.");
@@ -41,7 +45,7 @@ const SB = {
         throw new Error("Email não confirmado. Entre em contato com o administrador.");
       if(msg.includes("user not found"))
         throw new Error("Usuário não cadastrado. Clique em 'Solicitar' para pedir acesso.");
-      throw new Error(d.error_description||d.msg||d.error);
+      throw new Error(d.error_description||d.msg||d.error||`Erro ${r.status}`);
     }
     this.token=d.access_token;return d;
   },
@@ -381,46 +385,57 @@ function LoginScreen({onAuth}){
 }
 
 /* ─── Dashboard ─── */
-function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMap}) {
+function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMap,userRole}) {
   const [compPeriods,setCompPeriods]=useState([]);
   const [compData,setCompData]=useState({});
   const [loadingComp,setLoadingComp]=useState(false);
+  const [filterType,setFilterType]=useState(null);
+  const [compError,setCompError]=useState("");
 
+  const canExport=userRole?.role==="master"||userRole?.role==="admin";
   const tot=results.reduce((s,r)=>s+(r.total||0),0);
   const totE=results.reduce((s,r)=>s+(r.energyBill||0),0);
   const totP=results.reduce((s,r)=>s+(r.pctRevenue||0),0);
   const byType={};
   pdvs.forEach(p=>{if(p.contract_type!=="Boleto")byType[p.contract_type]=(byType[p.contract_type]||0)+1;});
   const active=pdvs.filter(p=>p.contract_type!=="Boleto").length;
+  const filteredResults=filterType?results.filter(r=>r.contract_type===filterType):results;
 
   async function togglePeriod(p){
-    const id=p.id;
+    const id=p.id;setCompError("");
     if(compPeriods.find(x=>x.id===id)){
-      setCompPeriods(compPeriods.filter(x=>x.id!==id));
-      const nd={...compData};delete nd[id];setCompData(nd);
+      setCompPeriods(prev=>prev.filter(x=>x.id!==id));
+      setCompData(prev=>{const nd={...prev};delete nd[id];return nd;});
       return;
     }
     setLoadingComp(true);
     try{
       const res=await onLoadPeriodResults(id);
-      setCompPeriods([...compPeriods,p]);
-      setCompData({...compData,[id]:res});
-    }catch(e){console.error(e);}
+      setCompPeriods(prev=>[...prev,p]);
+      setCompData(prev=>({...prev,[id]:res}));
+      if(!res||res.length===0) setCompError(`"${p.nome}" não tem resultados calculados. Rode o cálculo primeiro.`);
+    }catch(e){setCompError("Erro ao carregar: "+e.message);console.error(e);}
     setLoadingComp(false);
   }
 
-  // Build comparison table data
   const selPeriods=compPeriods;
-  const allPdvNames=[...new Set(pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>({id:p.id,name:p.name})))];
+  const allPdvNames=pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>({id:p.id,name:p.name}));
   const compRows=allPdvNames.map(({id,name})=>{
     const row={id,name};
-    selPeriods.forEach(p=>{
-      const pRes=compData[p.id]||[];
-      const r=pRes.find(x=>x.id===id);
-      row[p.id]=r?.total||0;
-    });
+    selPeriods.forEach(p=>{const pRes=compData[p.id]||[];const r=pRes.find(x=>x.id===id);row[p.id]=r?.total||0;});
     return row;
   }).filter(row=>selPeriods.some(p=>row[p.id]>0));
+
+  function exportCompCSV(){
+    if(!canExport)return;
+    const h="PDV,"+selPeriods.map(p=>p.nome).join(",")+"\n";
+    const rows=compRows.map(r=>
+      `"${r.name}",${selPeriods.map(p=>(r[p.id]||0).toFixed(2)).join(",")}`
+    ).join("\n");
+    const totRow=`"TOTAL",${selPeriods.map(p=>compRows.reduce((s,r)=>s+(r[p.id]||0),0).toFixed(2)).join(",")}`;
+    const b=new Blob([h+rows+"\n"+totRow],{type:"text/csv;charset=utf-8;"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="comparativo_periodos.csv";a.click();
+  }
 
   return <div className="fade-in">
     <div className="h2">Dashboard</div>
@@ -432,26 +447,33 @@ function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMa
       <Stat val={fmt(totP)} label="Total % fat." color="#00314f"/>
     </div>
     <div className="card">
-      <div className="h3">Por tipo de contrato</div>
+      <div className="h3">Por tipo de contrato {filterType&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtro: {filterType}) <span style={{cursor:"pointer",color:"var(--accent)"}} onClick={()=>setFilterType(null)}>✕ limpar</span></span>}</div>
       <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
         {Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([t,c])=>
-          <span key={t} className="chip" style={{padding:"4px 10px",fontSize:11}}>{t}: <strong>{c}</strong></span>
+          <span key={t} className="chip" onClick={()=>setFilterType(filterType===t?null:t)}
+            style={{padding:"4px 10px",fontSize:11,cursor:"pointer",
+              background:filterType===t?"var(--accent)":"",color:filterType===t?"#fff":""}}>{t}: <strong>{c}</strong></span>
         )}
       </div>
     </div>
     {results.length>0&&<div className="card">
-      <div className="h3">Top 10 maiores repasses</div>
+      <div className="h3">{filterType?`${filterType} (${filteredResults.length})`:`Top 10 maiores repasses`}</div>
       <table><thead><tr><th>PDV</th><th>Tipo</th><th>Valor</th></tr></thead>
-      <tbody>{[...results].sort((a,b)=>b.total-a.total).slice(0,10).map((r,i)=>
+      <tbody>{[...filteredResults].sort((a,b)=>b.total-a.total).slice(0,filterType?999:10).map((r,i)=>
         <tr key={i}><td className="trunc" style={{fontWeight:500}}>{r.name}</td>
         <td><span className="chip">{r.contract_type}</span></td>
         <td className="mono" style={{fontWeight:700}}>{fmt(r.total)}</td></tr>
       )}</tbody></table>
+      {filterType&&<div style={{fontSize:12,fontWeight:700,textAlign:"right",padding:"8px 4px",color:"var(--accent)"}}>
+        Total {filterType}: {fmt(filteredResults.reduce((s,r)=>s+r.total,0))}</div>}
     </div>}
 
     {allPeriods&&allPeriods.length>0&&<div className="card">
-      <div className="h3">Comparar períodos</div>
-      <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>Selecione períodos para comparar valores por PDV:</p>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <div className="h3">Comparar períodos</div>
+        {canExport&&selPeriods.length>0&&compRows.length>0&&<button className="btn btn-s" onClick={exportCompCSV} style={{fontSize:11}}>⬇ Exportar CSV</button>}
+      </div>
+      <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>Clique nos períodos para comparar valores por PDV:</p>
       <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
         {allPeriods.map(p=>{const sel=compPeriods.find(x=>x.id===p.id);
           return <div key={p.id} onClick={()=>togglePeriod(p)} style={{padding:"5px 12px",borderRadius:8,cursor:"pointer",fontSize:12,
@@ -460,6 +482,7 @@ function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMa
             transition:"all 0.12s"}}>{p.nome}</div>;})}
       </div>
       {loadingComp&&<div style={{fontSize:12,color:"var(--color-text-secondary)",padding:10}}>Carregando...</div>}
+      {compError&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",fontSize:12,marginBottom:10}}>{compError}</div>}
       {selPeriods.length>0&&compRows.length>0&&<div className="scroll-x"><table>
         <thead><tr><th>PDV</th>{selPeriods.map(p=><th key={p.id} className="mono" style={{textAlign:"right"}}>{p.nome}</th>)}</tr></thead>
         <tbody>
@@ -476,7 +499,7 @@ function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMa
           </tr>
         </tbody>
       </table></div>}
-      {selPeriods.length>0&&compRows.length===0&&<div className="empty">Nenhum resultado calculado nos períodos selecionados</div>}
+      {selPeriods.length>0&&compRows.length===0&&!loadingComp&&<div className="empty">Nenhum resultado calculado nos períodos selecionados. Rode o cálculo na aba Calcular primeiro.</div>}
       {selPeriods.length===0&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",textAlign:"center",padding:16}}>Clique nos períodos acima para comparar</div>}
     </div>}
   </div>;
@@ -1556,6 +1579,7 @@ export default function App() {
 
   /* ─── Auth check on mount ─── */
   useEffect(()=>{
+    const timeout=setTimeout(()=>{setAuthLoading(false);},5000); // never hang more than 5s
     (async()=>{
       try{
         const session=await tokenGet();
@@ -1564,9 +1588,10 @@ export default function App() {
           await tokenSet({access_token:d.access_token,refresh_token:d.refresh_token});
           setAuthed(true);setAuthEmail(d.user?.email||"");
         }
-      }catch(e){console.log("No valid session:",e.message);await tokenClear();}
-      finally{setAuthLoading(false);}
+      }catch(e){console.log("No valid session:",e.message);try{await tokenClear();}catch{}}
+      finally{clearTimeout(timeout);setAuthLoading(false);}
     })();
+    return ()=>clearTimeout(timeout);
   },[]);
 
   /* ─── Load data when authenticated ─── */
@@ -1768,7 +1793,7 @@ export default function App() {
       </div>
       <div className="main">
         {page==="dashboard"&&<Dashboard pdvs={pdvs} results={results} period={period}
-          allPeriods={allPeriods} revUuidMap={revUuidMap}
+          allPeriods={allPeriods} revUuidMap={revUuidMap} userRole={userRole}
           onLoadPeriodResults={async(pid)=>{
             const res=await SB.loadResults(pid,revUuidMap);
             return res.map(r=>{const p=pdvs.find(x=>x.id===r.id);return {...r,name:p?.name||""};});
