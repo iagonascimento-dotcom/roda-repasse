@@ -32,14 +32,34 @@ const SB = {
     const r=await fetch(`${SB_URL}/auth/v1/token?grant_type=password`,{
       method:"POST",headers:{"apikey":SB_KEY,"Content-Type":"application/json"},
       body:JSON.stringify({email,password:pw})});
-    const d=await r.json();if(d.error)throw new Error(d.error_description||d.msg||d.error);
+    const d=await r.json();
+    if(d.error){
+      const msg=(d.error_description||d.msg||d.error||"").toLowerCase();
+      if(msg.includes("invalid login")||msg.includes("invalid credentials"))
+        throw new Error("Email ou senha incorretos. Verifique seus dados ou solicite acesso.");
+      if(msg.includes("email not confirmed"))
+        throw new Error("Email não confirmado. Entre em contato com o administrador.");
+      if(msg.includes("user not found"))
+        throw new Error("Usuário não cadastrado. Clique em 'Solicitar' para pedir acesso.");
+      throw new Error(d.error_description||d.msg||d.error);
+    }
     this.token=d.access_token;return d;
   },
-  async signUp(email,pw){
+  async signUp(email,pw,name){
     const r=await fetch(`${SB_URL}/auth/v1/signup`,{
       method:"POST",headers:{"apikey":SB_KEY,"Content-Type":"application/json"},
-      body:JSON.stringify({email,password:pw})});
-    const d=await r.json();if(d.error)throw new Error(d.error_description||d.msg||d.error);
+      body:JSON.stringify({email,password:pw,data:{name:name||""}})});
+    const d=await r.json();
+    if(d.error){
+      const msg=(d.error_description||d.msg||d.error||"").toLowerCase();
+      if(msg.includes("already registered")||msg.includes("already exists"))
+        throw new Error("Este email já está cadastrado. Tente fazer login.");
+      if(msg.includes("disabled")||msg.includes("not allowed"))
+        throw new Error("Cadastro desabilitado. Entre em contato com o administrador.");
+      if(msg.includes("password")||msg.includes("weak"))
+        throw new Error("Senha muito fraca. Use pelo menos 6 caracteres.");
+      throw new Error(d.error_description||d.msg||d.error);
+    }
     return d;
   },
   async refreshToken(rt){
@@ -152,9 +172,9 @@ const SB = {
     const rows=await this.api(`/rest/v1/user_roles?email=eq.${encodeURIComponent(email)}&select=*`);
     return rows[0]||null;
   },
-  async ensureUserRole(userId,email){
-    await this.api("/rest/v1/user_roles",{method:"POST",
-      body:JSON.stringify({user_id:userId,email,nome:"",role:"pendente"}),
+  async ensureUserRole(userId,email,nome){
+    await this.api("/rest/v1/user_roles?on_conflict=email",{method:"POST",
+      body:JSON.stringify({user_id:userId,email,nome:nome||"",role:"pendente"}),
       headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
   },
   async loadAllUsers(){
@@ -302,6 +322,7 @@ function ConfirmModal({msg,detail,onConfirm,onCancel}) {
 function LoginScreen({onAuth}){
   const [email,setEmail]=useState("");
   const [pw,setPw]=useState("");
+  const [nome,setNome]=useState("");
   const [mode,setMode]=useState("login");
   const [loading,setLoading]=useState(false);
   const [err,setErr]=useState("");
@@ -310,6 +331,7 @@ function LoginScreen({onAuth}){
   async function submit(e){
     e?.preventDefault?.();
     if(!email||!pw){setErr("Preencha email e senha");return;}
+    if(mode==="signup"&&!nome.trim()){setErr("Preencha seu nome");return;}
     setLoading(true);setErr("");setMsg("");
     try{
       if(mode==="login"){
@@ -317,13 +339,14 @@ function LoginScreen({onAuth}){
         await tokenSet({access_token:d.access_token,refresh_token:d.refresh_token});
         onAuth(d);
       }else{
-        const d=await SB.signUp(email,pw);
-        if(d.user) await SB.ensureUserRole(d.user.id,email);
+        await SB.signUp(email,pw,nome.trim());
         setMsg("Solicitação enviada! Aguarde aprovação do administrador.");setMode("login");
       }
     }catch(e){setErr(e.message||"Erro desconhecido");}
     finally{setLoading(false);}
   }
+
+  const inputSt={width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #e5e5e3",fontSize:14};
 
   return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",
     background:"linear-gradient(135deg,#00314f 0%,#004d7a 100%)",fontFamily:"'DM Sans',sans-serif"}}>
@@ -334,14 +357,15 @@ function LoginScreen({onAuth}){
       </div>
       {err&&<div style={{padding:"8px 12px",borderRadius:8,background:"#fef0ed",color:"#f2401a",fontSize:12,marginBottom:12,fontWeight:500}}>{err}</div>}
       {msg&&<div style={{padding:"8px 12px",borderRadius:8,background:"#f0ffe0",color:"#3d7a00",fontSize:12,marginBottom:12,fontWeight:500}}>{msg}</div>}
+      {mode==="signup"&&<div className="field"><label style={{fontSize:11,fontWeight:600,color:"#6b6b6b",marginBottom:3,display:"block"}}>Nome completo</label>
+        <input type="text" value={nome} onChange={e=>setNome(e.target.value)} placeholder="Seu nome"
+          style={inputSt}/></div>}
       <div className="field"><label style={{fontSize:11,fontWeight:600,color:"#6b6b6b",marginBottom:3,display:"block"}}>Email</label>
-        <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
-          style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #e5e5e3",fontSize:14}}
-          onKeyDown={e=>e.key==="Enter"&&submit()}/></div>
+        <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="seu@email.com"
+          style={inputSt} onKeyDown={e=>e.key==="Enter"&&submit()}/></div>
       <div className="field"><label style={{fontSize:11,fontWeight:600,color:"#6b6b6b",marginBottom:3,display:"block"}}>Senha</label>
-        <input type="password" value={pw} onChange={e=>setPw(e.target.value)}
-          style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #e5e5e3",fontSize:14}}
-          onKeyDown={e=>e.key==="Enter"&&submit()}/></div>
+        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="••••••"
+          style={inputSt} onKeyDown={e=>e.key==="Enter"&&submit()}/></div>
       <button onClick={submit} disabled={loading}
         style={{width:"100%",padding:"11px",borderRadius:8,border:"none",cursor:"pointer",
           fontSize:14,fontWeight:700,fontFamily:"inherit",marginTop:8,
