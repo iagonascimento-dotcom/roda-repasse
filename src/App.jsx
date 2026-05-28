@@ -1405,6 +1405,9 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
 
   function statusBadge(s){return s==="entregue"?<span className="badge badge-ok">Entregue</span>:<span className="badge badge-warn">Pendente</span>;}
   function statusPeriodo(p){return p.status==="fechado"?<span className="badge badge-info">Fechado</span>:<span className="badge badge-ok">Aberto</span>;}
+  // Datas reais de pagamento: dia 20 do mês vigente e dia 03 do mês seguinte
+  function pagamentoDia20(p){const m=String(p.mes).padStart(2,"0");return `20/${m}/${p.ano}`;}
+  function pagamentoDia3(p){let m=p.mes+1,a=p.ano;if(m>12){m=1;a=p.ano+1;}return `03/${String(m).padStart(2,"0")}/${a}`;}
 
   async function create(){
     if(!newNome.trim())return;
@@ -1441,20 +1444,20 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
         <div><div className="h3" style={{marginBottom:2}}>Período ativo: {activePeriod.nome}</div>
           <div style={{fontSize:12,color:"var(--color-text-secondary)"}}>
-            Dia 20: {activePeriod.status_dia20==="entregue"?"✓ Entregue":"⏳ Pendente"} • Dia 3: {activePeriod.status_dia3==="entregue"?"✓ Entregue":"⏳ Pendente"}
+            Dia 20 (paga {pagamentoDia20(activePeriod)}): {activePeriod.status_dia20==="entregue"?"✓ Entregue":"⏳ Pendente"} • Dia 3 (paga {pagamentoDia3(activePeriod)}): {activePeriod.status_dia3==="entregue"?"✓ Entregue":"⏳ Pendente"}
           </div>
         </div>
         {statusPeriodo(activePeriod)}
       </div>
       {canManage&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {activePeriod.status_dia20==="pendente"&&<button className="btn btn-o"
-          onClick={()=>confirmAction("Entregar dia 20?",`Marcar dia 20 do período "${activePeriod.nome}" como entregue.`,
+          onClick={()=>confirmAction("Entregar dia 20?",`Marcar dia 20 (pagamento ${pagamentoDia20(activePeriod)}) do período "${activePeriod.nome}" como entregue.`,
             ()=>onUpdatePeriod(activePeriod.id,{status_dia20:"entregue",data_entrega_dia20:new Date().toISOString()}))}>
-          ✓ Entregar dia 20</button>}
-        {activePeriod.status_dia20==="entregue"&&activePeriod.status_dia3==="pendente"&&<button className="btn btn-o"
-          onClick={()=>confirmAction("Entregar dia 3?",`Marcar dia 3 do período "${activePeriod.nome}" como entregue.`,
+          ✓ Entregar dia 20 ({pagamentoDia20(activePeriod)})</button>}
+        {activePeriod.status_dia3==="pendente"&&<button className="btn btn-o"
+          onClick={()=>confirmAction("Entregar dia 3?",`Marcar dia 3 (pagamento ${pagamentoDia3(activePeriod)}) do período "${activePeriod.nome}" como entregue.`,
             ()=>onUpdatePeriod(activePeriod.id,{status_dia3:"entregue",data_entrega_dia3:new Date().toISOString()}))}>
-          ✓ Entregar dia 3</button>}
+          ✓ Entregar dia 3 ({pagamentoDia3(activePeriod)})</button>}
         {activePeriod.status_dia20==="entregue"&&activePeriod.status_dia3==="entregue"&&activePeriod.status==="aberto"&&
           <button className="btn btn-p"
             onClick={()=>confirmAction("Fechar período?",`Fechar "${activePeriod.nome}" definitivamente. Dados viram histórico consultável.`,
@@ -1473,8 +1476,8 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
           <td style={{fontWeight:600}}>{p.nome}{isActive&&<span className="badge badge-ok" style={{marginLeft:6}}>Ativo</span>}</td>
           <td className="mono">{String(p.mes).padStart(2,"0")}/{p.ano}</td>
           <td>{statusPeriodo(p)}</td>
-          <td>{statusBadge(p.status_dia20)}{p.data_entrega_dia20&&<div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{new Date(p.data_entrega_dia20).toLocaleDateString("pt-BR")}</div>}</td>
-          <td>{statusBadge(p.status_dia3)}{p.data_entrega_dia3&&<div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{new Date(p.data_entrega_dia3).toLocaleDateString("pt-BR")}</div>}</td>
+          <td>{statusBadge(p.status_dia20)}<div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>paga {pagamentoDia20(p)}{p.data_entrega_dia20&&` • entregue ${new Date(p.data_entrega_dia20).toLocaleDateString("pt-BR")}`}</div></td>
+          <td>{statusBadge(p.status_dia3)}<div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>paga {pagamentoDia3(p)}{p.data_entrega_dia3&&` • entregue ${new Date(p.data_entrega_dia3).toLocaleDateString("pt-BR")}`}</div></td>
           <td style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
             {!isActive&&p.status==="aberto"&&<button className="btn btn-s" style={{fontSize:11,padding:"4px 10px"}} onClick={()=>onSelectPeriod(p)}>Selecionar</button>}
             {canDelete&&<button className="btn btn-s" style={{fontSize:11,padding:"4px 10px",color:"var(--warn)",borderColor:"var(--warn)"}}
