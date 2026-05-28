@@ -1436,7 +1436,7 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
   const meses=["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
   useEffect(()=>{setNewNome(`${meses[newMes-1]} ${newAno}`);},[newMes,newAno]);
 
-  function statusBadge(s){return s==="entregue"?<span className="badge badge-ok">Entregue</span>:<span className="badge badge-warn">Pendente</span>;}
+  function statusBadge(s){return s==="entregue"?<span className="badge badge-ok">Entregue</span>:<span className="badge badge-warn">Em aberto</span>;}
   function statusPeriodo(p){return p.status==="fechado"?<span className="badge badge-info">Fechado</span>:<span className="badge badge-ok">Aberto</span>;}
   function payDates(p){
     // Dia 20: do mês vigente. Dia 3: do mês seguinte (com virada de ano)
@@ -1484,11 +1484,11 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
         <div><div className="h3" style={{marginBottom:6}}>Período ativo: {activePeriod.nome}</div>
           <div style={{display:"flex",gap:14,flexWrap:"wrap",fontSize:12}}>
             <div><span style={{color:"var(--color-text-secondary)"}}>Pagamento dia 20: </span>
-              <strong>{dts.d20}</strong> {activePeriod.status_dia20==="entregue"?<span style={{color:"#3d7a00"}}>✓ Entregue</span>:<span style={{color:"#ff8b00"}}>⏳ Pendente</span>}
+              <strong>{dts.d20}</strong> {activePeriod.status_dia20==="entregue"?<span style={{color:"#3d7a00"}}>✓ Entregue</span>:<span style={{color:"#ff8b00"}}>⏳ Em aberto</span>}
               {activePeriod.data_entrega_dia20&&<span style={{fontSize:10,color:"var(--color-text-tertiary)",marginLeft:4}}>(entregue em {new Date(activePeriod.data_entrega_dia20).toLocaleDateString("pt-BR")})</span>}
             </div>
             <div><span style={{color:"var(--color-text-secondary)"}}>Pagamento dia 3: </span>
-              <strong>{dts.d3}</strong> {activePeriod.status_dia3==="entregue"?<span style={{color:"#3d7a00"}}>✓ Entregue</span>:<span style={{color:"#ff8b00"}}>⏳ Pendente</span>}
+              <strong>{dts.d3}</strong> {activePeriod.status_dia3==="entregue"?<span style={{color:"#3d7a00"}}>✓ Entregue</span>:<span style={{color:"#ff8b00"}}>⏳ Em aberto</span>}
               {activePeriod.data_entrega_dia3&&<span style={{fontSize:10,color:"var(--color-text-tertiary)",marginLeft:4}}>(entregue em {new Date(activePeriod.data_entrega_dia3).toLocaleDateString("pt-BR")})</span>}
             </div>
           </div>
@@ -1501,7 +1501,7 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
             ()=>onUpdatePeriod(activePeriod.id,{status_dia20:"entregue",data_entrega_dia20:new Date().toISOString()}))}>
           ✓ Entregar dia 20 ({dts.d20})</button>
           :<button className="btn btn-s" style={{opacity:0.6}}
-          onClick={()=>confirmAction("Reverter entrega do dia 20?","Voltar status para Pendente.",
+          onClick={()=>confirmAction("Reverter entrega do dia 20?","Voltar status para Em aberto.",
             ()=>onUpdatePeriod(activePeriod.id,{status_dia20:"pendente",data_entrega_dia20:null}))}>
           ↺ Reverter dia 20</button>}
         {activePeriod.status_dia3==="pendente"?<button className="btn btn-o"
@@ -1509,7 +1509,7 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
             ()=>onUpdatePeriod(activePeriod.id,{status_dia3:"entregue",data_entrega_dia3:new Date().toISOString()}))}>
           ✓ Entregar dia 3 ({dts.d3})</button>
           :<button className="btn btn-s" style={{opacity:0.6}}
-          onClick={()=>confirmAction("Reverter entrega do dia 3?","Voltar status para Pendente.",
+          onClick={()=>confirmAction("Reverter entrega do dia 3?","Voltar status para Em aberto.",
             ()=>onUpdatePeriod(activePeriod.id,{status_dia3:"pendente",data_entrega_dia3:null}))}>
           ↺ Reverter dia 3</button>}
         {activePeriod.status_dia20==="pendente"&&activePeriod.status_dia3==="pendente"&&<button className="btn btn-p"
@@ -1537,7 +1537,7 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
           <td>{statusBadge(p.status_dia20)}{p.data_entrega_dia20&&<div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{new Date(p.data_entrega_dia20).toLocaleDateString("pt-BR")}</div>}</td>
           <td>{statusBadge(p.status_dia3)}{p.data_entrega_dia3&&<div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{new Date(p.data_entrega_dia3).toLocaleDateString("pt-BR")}</div>}</td>
           <td style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
-            {!isActive&&p.status==="aberto"&&<button className="btn btn-s" style={{fontSize:11,padding:"4px 10px"}} onClick={()=>onSelectPeriod(p)}>Selecionar</button>}
+            {!isActive&&<button className="btn btn-s" style={{fontSize:11,padding:"4px 10px"}} onClick={()=>onSelectPeriod(p)}>Selecionar</button>}
             {canDelete&&<button className="btn btn-s" style={{fontSize:11,padding:"4px 10px",color:"var(--warn)",borderColor:"var(--warn)"}}
               onClick={()=>confirmAction(`Excluir "${p.nome}"?`,`Isso vai apagar PERMANENTEMENTE o período "${p.nome}" junto com todos os medidores, faturamentos, ajustes e resultados calculados. Esta ação NÃO pode ser desfeita.`,
                 ()=>onDeletePeriod(p.id))}>🗑 Excluir</button>}
@@ -2029,13 +2029,14 @@ export default function App() {
     ["admin","⚙","Administração",["master"]],
     ["---","","Passo a passo do repasse",["master","admin"]],
     ["historico","⏱","Histórico",["master","admin","usuario","view"]],
+    ["pendencias","⚑","Pendências",["master","admin","usuario"],true],
     ["pdvs","⊞","Cadastro PDVs",["master","admin"]],
     ["entrada","⇥","Entrada dados",["master","admin"]],
     ["calcular","≡","Calcular",["master","admin"]],
     ["demo","☷","Demonstrativo",["master","admin","usuario"]],
     ["fin","$","Financeiro",["master","admin"]],
   ];
-  const nav=allNav.filter(([,,, roles])=>roles.includes(role)).map(([k,ic,lb])=>[k,ic,lb]);
+  const nav=allNav.filter(([,,, roles])=>roles.includes(role)).map(([k,ic,lb,r,sub])=>[k,ic,lb,sub]);
 
   return <>
     <style>{css}</style>
@@ -2050,11 +2051,13 @@ export default function App() {
           <img src={LOGO_SVG} alt="Roda" style={{height:90}}/>
           <span style={{fontSize:11,fontWeight:500,letterSpacing:"2px",color:"rgba(255,255,255,0.45)",textTransform:"uppercase"}}>repasse</span>
         </div>
-        {nav.map(([k,ic,lb],i)=>
+        {nav.map(([k,ic,lb,sub],i)=>
           k==="---"?<div key={`div-${i}`} style={{padding:"12px 16px 4px",fontSize:9,fontWeight:700,letterSpacing:"1.5px",
             textTransform:"uppercase",color:"rgba(255,255,255,0.3)",borderTop:"1px solid rgba(255,255,255,0.08)",marginTop:6}}>{lb}</div>
-          :<div key={k} className={`nav-item ${page===k?"active":""}`} onClick={()=>tryNavigate(k)}>
-            <span style={{fontSize:15,width:18,textAlign:"center"}}>{ic}</span>{lb}
+          :<div key={k} className={`nav-item ${page===k?"active":""}`} onClick={()=>tryNavigate(k)}
+            style={sub?{paddingLeft:36,fontSize:12,opacity:0.85}:{}}>
+            <span style={{fontSize:sub?11:15,width:18,textAlign:"center"}}>{sub?"└":ic}</span>
+            <span style={{fontSize:sub?11:15,opacity:sub?0.7:1}}>{sub?ic:""}</span>{lb}
           </div>
         )}
         <div style={{flex:1}}/>
@@ -2075,17 +2078,26 @@ export default function App() {
             return res.map(r=>{const p=pdvs.find(x=>x.id===r.id);return {...r,name:p?.name||""};});
           }}/>}
         {page==="admin"&&role==="master"&&<AdminPanel userRole={userRole}/>}
+        {page==="pendencias"&&(activePeriod?<>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+            <label style={{fontSize:12,color:"var(--color-text-secondary)",fontWeight:500}}>Período:</label>
+            <select value={activePeriod?.id||""}
+              onChange={e=>{const p=allPeriods.find(x=>x.id===e.target.value);if(p)handleSelectPeriod(p);}}
+              style={{padding:"7px 12px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:150,background:"#fff"}}>
+              {[...allPeriods].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes)).map(p=>
+                <option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
+            </select>
+          </div>
+          <Pendencias pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
+            savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
+            userRole={userRole} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>
+        </>:<div className="card empty" style={{textAlign:"center",fontSize:13,padding:30}}>
+          Nenhum período selecionado. Vá em Histórico e escolha um período.
+        </div>)}
         {page==="historico"&&<>
           <Historico periods={allPeriods} activePeriod={activePeriod}
             onSelectPeriod={handleSelectPeriod} onCreatePeriod={handleCreatePeriod} onUpdatePeriod={handleUpdatePeriod}
             onDeletePeriod={handleDeletePeriod} userRole={userRole}/>
-          {activePeriod?<div style={{marginTop:24,paddingTop:20,borderTop:"2px solid var(--color-border-secondary)"}}>
-            <Pendencias pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
-              savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
-              userRole={userRole} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>
-          </div>:<div className="card empty" style={{marginTop:16,textAlign:"center",fontSize:13,padding:20}}>
-            Selecione um período acima para ver as pendências.
-          </div>}
         </>}
         {page==="pdvs"&&<PdvManager pdvs={pdvs} setPdvs={setPdvs} save={savePdvsToSB}/>}
         {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB}/>}
