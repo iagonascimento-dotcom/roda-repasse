@@ -571,26 +571,28 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   }
 
   return <div className="fade-in">
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:14,flexWrap:"wrap"}}>
-      <div className="h2" style={{margin:0}}>Dashboard</div>
-      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-        <label style={{fontSize:12,color:"var(--color-text-secondary)",fontWeight:500}}>Período:</label>
+    <div className="h2" style={{marginBottom:12}}>Dashboard</div>
+    <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:8,flexWrap:"wrap"}}>
+      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+        <label style={{fontSize:11,color:"var(--color-text-secondary)",fontWeight:600}}>Período início</label>
         <select value={viewFrom} onChange={e=>setRange("from",e.target.value)}
-          style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:130,background:"#fff"}}>
-          {sortedPeriodsDesc.length===0&&<option value="">Nenhum período</option>}
-          {sortedPeriodsDesc.map(p=><option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
-        </select>
-        <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>até</span>
-        <select value={viewTo} onChange={e=>setRange("to",e.target.value)}
-          style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:130,background:"#fff"}}>
+          style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:150,background:"#fff"}}>
           {sortedPeriodsDesc.length===0&&<option value="">Nenhum período</option>}
           {sortedPeriodsDesc.map(p=><option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
         </select>
       </div>
+      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+        <label style={{fontSize:11,color:"var(--color-text-secondary)",fontWeight:600}}>Período fim</label>
+        <select value={viewTo} onChange={e=>setRange("to",e.target.value)}
+          style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:150,background:"#fff"}}>
+          {sortedPeriodsDesc.length===0&&<option value="">Nenhum período</option>}
+          {sortedPeriodsDesc.map(p=><option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
+        </select>
+      </div>
+      {isAgg&&<div style={{fontSize:12,color:"var(--color-text-secondary)",fontStyle:"italic",paddingBottom:8}}>
+        📊 {rangePeriods.length} meses somados {viewLoading&&"(carregando...)"}
+      </div>}
     </div>
-    {isAgg&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:14,fontStyle:"italic"}}>
-      📊 Visão consolidada: {rangePeriods.length} meses somados {viewLoading&&"(carregando...)"}
-    </div>}
     <div className="grid4" style={{marginBottom:16}}>
       <Stat val={fmt(tot)} label="Total repasse" color="#00314f"/>
       <Stat val={active} label="PDVs ativos" color="#9bf400"/>
