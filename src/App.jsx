@@ -442,17 +442,86 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const [loadingComp,setLoadingComp]=useState(false);
   const [filterType,setFilterType]=useState(null);
   const [compError,setCompError]=useState("");
+  // Header range view: when from===to it's single period; when different it's aggregated
+  const [viewFrom,setViewFrom]=useState("");
+  const [viewTo,setViewTo]=useState("");
+  const [viewData,setViewData]=useState({});
+  const [viewLoading,setViewLoading]=useState(false);
 
   const canExport=userRole?.role==="master"||userRole?.role==="admin";
-  const tot=results.reduce((s,r)=>s+(r.total||0),0);
-  const totE=results.reduce((s,r)=>s+(r.energyBill||0),0);
-  const totP=results.reduce((s,r)=>s+(r.pctRevenue||0),0);
+  const sortedPeriodsDesc=[...(allPeriods||[])].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes));
+
+  // Sync header dropdowns when activePeriod changes externally
+  useEffect(()=>{
+    if(activePeriod?.id){
+      if(!viewFrom) setViewFrom(activePeriod.id);
+      if(!viewTo) setViewTo(activePeriod.id);
+    }
+  },[activePeriod?.id]);
+
+  // Compute range of periods between viewFrom and viewTo (inclusive)
+  const rangePeriods=(()=>{
+    if(!viewFrom||!viewTo||!allPeriods)return [];
+    const fromP=allPeriods.find(p=>p.id===viewFrom);const toP=allPeriods.find(p=>p.id===viewTo);
+    if(!fromP||!toP)return [];
+    let f=fromP.ano*12+fromP.mes,t=toP.ano*12+toP.mes;
+    if(f>t)[f,t]=[t,f];
+    return [...allPeriods].filter(p=>{const k=p.ano*12+p.mes;return k>=f&&k<=t;})
+      .sort((a,b)=>(a.ano*12+a.mes)-(b.ano*12+b.mes));
+  })();
+  const isAgg=rangePeriods.length>1;
+
+  // Load aggregated data when range > 1
+  useEffect(()=>{
+    if(!isAgg){setViewData({});return;}
+    let cancelled=false;
+    (async()=>{
+      setViewLoading(true);
+      const toLoad=rangePeriods.filter(p=>!viewData[p.id]);
+      if(toLoad.length===0){setViewLoading(false);return;}
+      const nd={...viewData};
+      for(const p of toLoad){
+        try{const r=await onLoadPeriodResults(p.id);if(cancelled)return;nd[p.id]=r||[];}
+        catch(e){console.error(e);nd[p.id]=[];}
+      }
+      if(!cancelled){setViewData(nd);setViewLoading(false);}
+    })();
+    return ()=>{cancelled=true;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[isAgg,viewFrom,viewTo]);
+
+  // Handle dropdown changes — when same period, sync activePeriod
+  function setRange(field,id){
+    if(field==="from")setViewFrom(id);else setViewTo(id);
+    const newFrom=field==="from"?id:viewFrom;const newTo=field==="to"?id:viewTo;
+    if(newFrom===newTo&&id){
+      const p=(allPeriods||[]).find(x=>x.id===id);
+      if(p&&onSelectPeriod&&p.id!==activePeriod?.id)onSelectPeriod(p);
+    }
+  }
+
+  // Aggregated results: if isAgg, sum by PDV across all periods in range; else use current results
+  const aggResults=(()=>{
+    if(!isAgg) return results;
+    const acc={};
+    rangePeriods.forEach(p=>{(viewData[p.id]||[]).forEach(r=>{
+      if(!acc[r.id])acc[r.id]={id:r.id,name:r.name,contract_type:r.contract_type,total:0,energyBill:0,pctRevenue:0};
+      acc[r.id].total+=(r.total||0);
+      acc[r.id].energyBill+=(r.energyBill||0);
+      acc[r.id].pctRevenue+=(r.pctRevenue||0);
+    });});
+    return Object.values(acc);
+  })();
+
+  const tot=aggResults.reduce((s,r)=>s+(r.total||0),0);
+  const totE=aggResults.reduce((s,r)=>s+(r.energyBill||0),0);
+  const totP=aggResults.reduce((s,r)=>s+(r.pctRevenue||0),0);
   const byType={};
   pdvs.forEach(p=>{if(p.contract_type!=="Boleto")byType[p.contract_type]=(byType[p.contract_type]||0)+1;});
   const active=pdvs.filter(p=>p.contract_type!=="Boleto").length;
-  const filteredResults=filterType?results.filter(r=>r.contract_type===filterType):results;
+  const filteredResults=filterType?aggResults.filter(r=>r.contract_type===filterType):aggResults;
 
-  // Sort periods chronologically
+  // Sort periods chronologically (for comparison section below)
   const sortedPeriods=[...(allPeriods||[])].sort((a,b)=>(a.ano*12+a.mes)-(b.ano*12+b.mes));
   const [rangeFrom,setRangeFrom]=useState("");
   const [rangeTo,setRangeTo]=useState("");
@@ -502,19 +571,26 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   }
 
   return <div className="fade-in">
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,gap:14,flexWrap:"wrap"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:14,flexWrap:"wrap"}}>
       <div className="h2" style={{margin:0}}>Dashboard</div>
-      <div style={{display:"flex",alignItems:"center",gap:8}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
         <label style={{fontSize:12,color:"var(--color-text-secondary)",fontWeight:500}}>Período:</label>
-        <select value={activePeriod?.id||""}
-          onChange={e=>{const p=(allPeriods||[]).find(x=>x.id===e.target.value);if(p&&onSelectPeriod)onSelectPeriod(p);}}
-          style={{padding:"7px 12px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:150,background:"#fff"}}>
-          {(allPeriods||[]).length===0&&<option value="">Nenhum período</option>}
-          {[...(allPeriods||[])].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes)).map(p=>
-            <option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
+        <select value={viewFrom} onChange={e=>setRange("from",e.target.value)}
+          style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:130,background:"#fff"}}>
+          {sortedPeriodsDesc.length===0&&<option value="">Nenhum período</option>}
+          {sortedPeriodsDesc.map(p=><option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
+        </select>
+        <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>até</span>
+        <select value={viewTo} onChange={e=>setRange("to",e.target.value)}
+          style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:130,background:"#fff"}}>
+          {sortedPeriodsDesc.length===0&&<option value="">Nenhum período</option>}
+          {sortedPeriodsDesc.map(p=><option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
         </select>
       </div>
     </div>
+    {isAgg&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:14,fontStyle:"italic"}}>
+      📊 Visão consolidada: {rangePeriods.length} meses somados {viewLoading&&"(carregando...)"}
+    </div>}
     <div className="grid4" style={{marginBottom:16}}>
       <Stat val={fmt(tot)} label="Total repasse" color="#00314f"/>
       <Stat val={active} label="PDVs ativos" color="#9bf400"/>
@@ -531,16 +607,16 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
         )}
       </div>
     </div>
-    {results.length>0?<div className="card">
-      <div className="h3">{filterType?`${filterType} (${filteredResults.length})`:`Top 10 maiores repasses`}</div>
-      <table><thead><tr><th>PDV</th><th>Tipo</th><th>Valor</th></tr></thead>
+    {aggResults.length>0?<div className="card">
+      <div className="h3">{filterType?`${filterType} (${filteredResults.length})`:`Top 10 maiores repasses${isAgg?" (somado)":""}`}</div>
+      <table><thead><tr><th>PDV</th><th>Tipo</th><th>Valor{isAgg?" somado":""}</th></tr></thead>
       <tbody>{[...filteredResults].sort((a,b)=>b.total-a.total).slice(0,filterType?999:10).map((r,i)=>
         <tr key={i}><td className="trunc" style={{fontWeight:500}}>{r.name}</td>
         <td><span className="chip">{r.contract_type}</span></td>
         <td className="mono" style={{fontWeight:700}}>{fmt(r.total)}</td></tr>
       )}</tbody></table>
       {filterType&&<div style={{fontSize:12,fontWeight:700,textAlign:"right",padding:"8px 4px",color:"var(--accent)"}}>
-        Total {filterType}: {fmt(filteredResults.reduce((s,r)=>s+r.total,0))}</div>}
+        Total {filterType}{isAgg?" (somado)":""}: {fmt(filteredResults.reduce((s,r)=>s+r.total,0))}</div>}
     </div>:filterType?<div className="card">
       <div className="h3">PDVs do tipo "{filterType}" ({pdvs.filter(p=>p.contract_type===filterType).length})</div>
       <p style={{fontSize:11,color:"var(--color-text-secondary)",marginBottom:8}}>Resultados ainda não calculados para este período. Mostrando configuração:</p>
@@ -1462,7 +1538,7 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
   return <div className="fade-in">
     {confirm&&<ConfirmModal msg={confirm.msg} detail={confirm.detail} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-      <div className="h2">Histórico de períodos</div>
+      <div className="h2">Histórico de Período</div>
       {canManage&&<button className="btn btn-p" onClick={()=>setShowNew(!showNew)}>+ Novo período</button>}
     </div>
 
@@ -2031,7 +2107,7 @@ export default function App() {
     ["dashboard","◫","Dashboard",["master","admin","usuario","view"]],
     ["admin","⚙","Administração",["master"]],
     ["---","","Passo a passo do repasse",["master","admin"]],
-    ["historico","⏱","Histórico",["master","admin","usuario","view"]],
+    ["historico","⏱","Histórico de Período",["master","admin","usuario","view"]],
     ["pdvs","⊞","Cadastro PDVs",["master","admin"]],
     ["entrada","⇥","Entrada dados",["master","admin"]],
     ["calcular","≡","Calcular",["master","admin"]],
