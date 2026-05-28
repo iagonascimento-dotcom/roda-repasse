@@ -112,6 +112,12 @@ const SB = {
     await this.api(`/rest/v1/periodos?id=eq.${id}`,{method:"PATCH",
       body:JSON.stringify(fields),headers:{"Prefer":"return=minimal"}});
   },
+  async deletePeriod(id){
+    // Delete dependents first (FK constraints), then the period
+    await this.api(`/rest/v1/resultados?periodo_id=eq.${id}`,{method:"DELETE",headers:{"Prefer":"return=minimal"}});
+    await this.api(`/rest/v1/dados_mensais?periodo_id=eq.${id}`,{method:"DELETE",headers:{"Prefer":"return=minimal"}});
+    await this.api(`/rest/v1/periodos?id=eq.${id}`,{method:"DELETE",headers:{"Prefer":"return=minimal"}});
+  },
   /* Monthly data */
   async loadMonthlyData(periodoId,pdvMap){
     const rows=await this.api(`/rest/v1/dados_mensais?select=*&periodo_id=eq.${periodoId}`);
@@ -401,22 +407,35 @@ function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMa
   const active=pdvs.filter(p=>p.contract_type!=="Boleto").length;
   const filteredResults=filterType?results.filter(r=>r.contract_type===filterType):results;
 
-  async function togglePeriod(p){
-    const id=p.id;setCompError("");
-    if(compPeriods.find(x=>x.id===id)){
-      setCompPeriods(prev=>prev.filter(x=>x.id!==id));
-      setCompData(prev=>{const nd={...prev};delete nd[id];return nd;});
-      return;
-    }
+  // Sort periods chronologically
+  const sortedPeriods=[...(allPeriods||[])].sort((a,b)=>(a.ano*12+a.mes)-(b.ano*12+b.mes));
+  const [rangeFrom,setRangeFrom]=useState("");
+  const [rangeTo,setRangeTo]=useState("");
+
+  async function loadRange(){
+    setCompError("");
+    if(!rangeFrom||!rangeTo){setCompError("Selecione o período inicial e final.");return;}
+    const fromP=sortedPeriods.find(p=>p.id===rangeFrom);
+    const toP=sortedPeriods.find(p=>p.id===rangeTo);
+    if(!fromP||!toP)return;
+    let fromKey=fromP.ano*12+fromP.mes, toKey=toP.ano*12+toP.mes;
+    if(fromKey>toKey){[fromKey,toKey]=[toKey,fromKey];}
+    const inRange=sortedPeriods.filter(p=>{const k=p.ano*12+p.mes;return k>=fromKey&&k<=toKey;});
+    if(inRange.length===0){setCompError("Nenhum período no intervalo.");return;}
     setLoadingComp(true);
+    const newData={};let empties=[];
     try{
-      const res=await onLoadPeriodResults(id);
-      setCompPeriods(prev=>[...prev,p]);
-      setCompData(prev=>({...prev,[id]:res}));
-      if(!res||res.length===0) setCompError(`"${p.nome}" não tem resultados calculados. Rode o cálculo primeiro.`);
+      for(const p of inRange){
+        const res=await onLoadPeriodResults(p.id);
+        newData[p.id]=res||[];
+        if(!res||res.length===0) empties.push(p.nome);
+      }
+      setCompPeriods(inRange);setCompData(newData);
+      if(empties.length>0) setCompError(`Sem resultados calculados em: ${empties.join(", ")}. Rode o cálculo nesses períodos.`);
     }catch(e){setCompError("Erro ao carregar: "+e.message);console.error(e);}
     setLoadingComp(false);
   }
+  function clearRange(){setCompPeriods([]);setCompData({});setRangeFrom("");setRangeTo("");setCompError("");}
 
   const selPeriods=compPeriods;
   const allPdvNames=pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>({id:p.id,name:p.name}));
@@ -473,13 +492,26 @@ function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMa
         <div className="h3">Comparar períodos</div>
         {canExport&&selPeriods.length>0&&compRows.length>0&&<button className="btn btn-s" onClick={exportCompCSV} style={{fontSize:11}}>⬇ Exportar CSV</button>}
       </div>
-      <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>Clique nos períodos para comparar valores por PDV:</p>
-      <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
-        {allPeriods.map(p=>{const sel=compPeriods.find(x=>x.id===p.id);
-          return <div key={p.id} onClick={()=>togglePeriod(p)} style={{padding:"5px 12px",borderRadius:8,cursor:"pointer",fontSize:12,
-            fontWeight:sel?700:400,background:sel?"var(--accent)":"var(--color-background-secondary)",
-            color:sel?"#fff":"var(--color-text-secondary)",border:sel?"none":"1px solid var(--color-border-tertiary)",
-            transition:"all 0.12s"}}>{p.nome}</div>;})}
+      <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>Selecione um intervalo de períodos para comparar valores por PDV:</p>
+      <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap",marginBottom:16}}>
+        <div>
+          <label style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:3}}>De</label>
+          <select value={rangeFrom} onChange={e=>setRangeFrom(e.target.value)}
+            style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,minWidth:130}}>
+            <option value="">Selecione...</option>
+            {sortedPeriods.map(p=><option key={p.id} value={p.id}>{p.nome}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:3}}>Até</label>
+          <select value={rangeTo} onChange={e=>setRangeTo(e.target.value)}
+            style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,minWidth:130}}>
+            <option value="">Selecione...</option>
+            {sortedPeriods.map(p=><option key={p.id} value={p.id}>{p.nome}</option>)}
+          </select>
+        </div>
+        <button className="btn btn-p" onClick={loadRange} disabled={loadingComp}>{loadingComp?"Carregando...":"Comparar"}</button>
+        {selPeriods.length>0&&<button className="btn btn-s" onClick={clearRange}>Limpar</button>}
       </div>
       {loadingComp&&<div style={{fontSize:12,color:"var(--color-text-secondary)",padding:10}}>Carregando...</div>}
       {compError&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",fontSize:12,marginBottom:10}}>{compError}</div>}
@@ -500,7 +532,7 @@ function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMa
         </tbody>
       </table></div>}
       {selPeriods.length>0&&compRows.length===0&&!loadingComp&&<div className="empty">Nenhum resultado calculado nos períodos selecionados. Rode o cálculo na aba Calcular primeiro.</div>}
-      {selPeriods.length===0&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",textAlign:"center",padding:16}}>Clique nos períodos acima para comparar</div>}
+      {selPeriods.length===0&&!loadingComp&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",textAlign:"center",padding:16}}>Selecione "De" e "Até" e clique em Comparar</div>}
     </div>}
   </div>;
 }
@@ -1314,8 +1346,9 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,savePdvs,saveMd,onDirty,use
 }
 
 /* ─── Histórico de Períodos ─── */
-function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdatePeriod,userRole}) {
+function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdatePeriod,onDeletePeriod,userRole}) {
   const canManage=userRole?.role==="master"||userRole?.role==="admin";
+  const canDelete=userRole?.role==="master";
   const [showNew,setShowNew]=useState(false);
   const [newNome,setNewNome]=useState("");
   const [newMes,setNewMes]=useState(new Date().getMonth()+1);
@@ -1397,7 +1430,12 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
           <td>{statusPeriodo(p)}</td>
           <td>{statusBadge(p.status_dia20)}{p.data_entrega_dia20&&<div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{new Date(p.data_entrega_dia20).toLocaleDateString("pt-BR")}</div>}</td>
           <td>{statusBadge(p.status_dia3)}{p.data_entrega_dia3&&<div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{new Date(p.data_entrega_dia3).toLocaleDateString("pt-BR")}</div>}</td>
-          <td>{!isActive&&p.status==="aberto"&&<button className="btn btn-s" style={{fontSize:11,padding:"4px 10px"}} onClick={()=>onSelectPeriod(p)}>Selecionar</button>}</td>
+          <td style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+            {!isActive&&p.status==="aberto"&&<button className="btn btn-s" style={{fontSize:11,padding:"4px 10px"}} onClick={()=>onSelectPeriod(p)}>Selecionar</button>}
+            {canDelete&&<button className="btn btn-s" style={{fontSize:11,padding:"4px 10px",color:"var(--warn)",borderColor:"var(--warn)"}}
+              onClick={()=>confirmAction(`Excluir "${p.nome}"?`,`Isso vai apagar PERMANENTEMENTE o período "${p.nome}" junto com todos os medidores, faturamentos, ajustes e resultados calculados. Esta ação NÃO pode ser desfeita.`,
+                ()=>onDeletePeriod(p.id))}>🗑 Excluir</button>}
+          </td>
         </tr>;})}
       </tbody></table>}
     </div>
@@ -1712,6 +1750,20 @@ export default function App() {
     }catch(e){alert("Erro: "+e.message);}
   }
 
+  async function handleDeletePeriod(id){
+    try{
+      await SB.deletePeriod(id);
+      const newPeriods=await SB.loadPeriods();
+      setAllPeriods(newPeriods);
+      if(activePeriod?.id===id){
+        const next=newPeriods.find(p=>p.status==="aberto")||newPeriods[0]||null;
+        setActivePeriod(next);
+        if(next){await handleSelectPeriod(next);}
+        else{setMd({});setResults([]);}
+      }
+    }catch(e){alert("Erro ao excluir: "+e.message);}
+  }
+
   function handleAuth(d){
     setAuthed(true);setAuthEmail(d.user?.email||"");
   }
@@ -1800,7 +1852,8 @@ export default function App() {
           }}/>}
         {page==="admin"&&role==="master"&&<AdminPanel userRole={userRole}/>}
         {page==="historico"&&<Historico periods={allPeriods} activePeriod={activePeriod}
-          onSelectPeriod={handleSelectPeriod} onCreatePeriod={handleCreatePeriod} onUpdatePeriod={handleUpdatePeriod} userRole={userRole}/>}
+          onSelectPeriod={handleSelectPeriod} onCreatePeriod={handleCreatePeriod} onUpdatePeriod={handleUpdatePeriod}
+          onDeletePeriod={handleDeletePeriod} userRole={userRole}/>}
         {page==="pendencias"&&<Pendencias pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
           savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
           userRole={userRole} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
