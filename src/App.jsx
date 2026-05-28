@@ -520,7 +520,7 @@ function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMa
         )}
       </div>
     </div>
-    {results.length>0&&<div className="card">
+    {results.length>0?<div className="card">
       <div className="h3">{filterType?`${filterType} (${filteredResults.length})`:`Top 10 maiores repasses`}</div>
       <table><thead><tr><th>PDV</th><th>Tipo</th><th>Valor</th></tr></thead>
       <tbody>{[...filteredResults].sort((a,b)=>b.total-a.total).slice(0,filterType?999:10).map((r,i)=>
@@ -530,6 +530,19 @@ function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMa
       )}</tbody></table>
       {filterType&&<div style={{fontSize:12,fontWeight:700,textAlign:"right",padding:"8px 4px",color:"var(--accent)"}}>
         Total {filterType}: {fmt(filteredResults.reduce((s,r)=>s+r.total,0))}</div>}
+    </div>:filterType?<div className="card">
+      <div className="h3">PDVs do tipo "{filterType}" ({pdvs.filter(p=>p.contract_type===filterType).length})</div>
+      <p style={{fontSize:11,color:"var(--color-text-secondary)",marginBottom:8}}>Resultados ainda não calculados para este período. Mostrando configuração:</p>
+      <div className="scroll-x"><table><thead><tr><th>PDV</th><th>% Negociado</th><th>R$/kWh</th><th>Mín. repasse</th><th>Dia pgto</th></tr></thead>
+      <tbody>{pdvs.filter(p=>p.contract_type===filterType).map(p=>
+        <tr key={p.id}><td className="trunc" style={{fontWeight:500}}>{p.name}</td>
+        <td className="mono">{((p.negotiated_percentage||0)*100).toFixed(1)}%</td>
+        <td className="mono">{fmt(p.kwh_unity_price)}</td>
+        <td className="mono">{fmt(p.minimal_repass)}</td>
+        <td>{p.payment_day}</td></tr>
+      )}</tbody></table></div>
+    </div>:<div className="card empty" style={{padding:20,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>
+      {period?"Resultados ainda não calculados para este período. Clique em um tipo acima para ver os PDVs ou aguarde o cálculo.":"Nenhum período carregado. Acesse Histórico e selecione um período."}
     </div>}
 
     {allPeriods&&allPeriods.length>0&&<div className="card">
@@ -1804,7 +1817,9 @@ export default function App() {
         const periods=await SB.loadPeriods();
         setAllPeriods(periods);
 
-        const active=periods.find(p=>p.status==="aberto");
+        // Prefer "aberto", fallback to most recent
+        const sorted=[...periods].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes));
+        const active=sorted.find(p=>p.status==="aberto")||sorted[0];
         if(active){
           setActivePeriod(active);
           setLoadMsg("Carregando dados do período...");
