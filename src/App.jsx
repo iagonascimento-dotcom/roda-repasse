@@ -436,7 +436,7 @@ function LoginScreen({onAuth}){
 }
 
 /* ─── Dashboard ─── */
-function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMap,userRole}) {
+function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,onLoadPeriodResults,revUuidMap,userRole}) {
   const [compPeriods,setCompPeriods]=useState([]);
   const [compData,setCompData]=useState({});
   const [loadingComp,setLoadingComp]=useState(false);
@@ -502,8 +502,19 @@ function Dashboard({pdvs,results,period,allPeriods,onLoadPeriodResults,revUuidMa
   }
 
   return <div className="fade-in">
-    <div className="h2">Dashboard</div>
-    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Período ativo: <strong>{period||"Não definido"}</strong></div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,gap:14,flexWrap:"wrap"}}>
+      <div className="h2" style={{margin:0}}>Dashboard</div>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <label style={{fontSize:12,color:"var(--color-text-secondary)",fontWeight:500}}>Período:</label>
+        <select value={activePeriod?.id||""}
+          onChange={e=>{const p=(allPeriods||[]).find(x=>x.id===e.target.value);if(p&&onSelectPeriod)onSelectPeriod(p);}}
+          style={{padding:"7px 12px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:150,background:"#fff"}}>
+          {(allPeriods||[]).length===0&&<option value="">Nenhum período</option>}
+          {[...(allPeriods||[])].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes)).map(p=>
+            <option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
+        </select>
+      </div>
+    </div>
     <div className="grid4" style={{marginBottom:16}}>
       <Stat val={fmt(tot)} label="Total repasse" color="#00314f"/>
       <Stat val={active} label="PDVs ativos" color="#9bf400"/>
@@ -1247,7 +1258,7 @@ function Financeiro({pdvs,setPdvs,results,period,savePdvs,onDirty}) {
 }
 
 /* ─── Demonstrativo ─── */
-function Demonstrativo({pdvs,setPdvs,md,setMd,period,savePdvs,saveMd,onDirty,userRole,onRequestChange}) {
+function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onSelectPeriod,savePdvs,saveMd,onDirty,userRole,onRequestChange}) {
   const [selType,setSelType]=useState(CONTRACT_TYPES[0]);
   const [editMode,setEditMode]=useState(false);
   const [localMd,setLocalMd]=useState({});
@@ -1342,7 +1353,16 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,savePdvs,saveMd,onDirty,use
           :<button className="btn btn-s" onClick={()=>setEditMode(true)} style={{border:"1.5px dashed var(--accent)",color:"var(--accent)"}}>{isUsuario?"📩 Solicitar alteração":"✎ Editar valores"}</button>}
       </div>
     </div>
-    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Período: <strong>{period||"—"}</strong></div>
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+      <label style={{fontSize:12,color:"var(--color-text-secondary)",fontWeight:500}}>Período:</label>
+      <select value={activePeriod?.id||""}
+        onChange={e=>{const p=(allPeriods||[]).find(x=>x.id===e.target.value);if(p&&onSelectPeriod)onSelectPeriod(p);}}
+        style={{padding:"7px 12px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontWeight:600,minWidth:150,background:"#fff"}}>
+        {(allPeriods||[]).length===0&&<option value="">Nenhum período</option>}
+        {[...(allPeriods||[])].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes)).map(p=>
+          <option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
+      </select>
+    </div>
     <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:20}}>
       {CONTRACT_TYPES.filter(t=>t!=="Boleto").map(t=>
         <div key={t} onClick={()=>{if(!editMode||changeCount===0)setSelType(t);}}
@@ -2011,7 +2031,6 @@ export default function App() {
     ["historico","⏱","Histórico",["master","admin","usuario","view"]],
     ["pdvs","⊞","Cadastro PDVs",["master","admin"]],
     ["entrada","⇥","Entrada dados",["master","admin"]],
-    ["pendencias","⚑","Pendências",["master","admin","usuario"]],
     ["calcular","≡","Calcular",["master","admin"]],
     ["demo","☷","Demonstrativo",["master","admin","usuario"]],
     ["fin","$","Financeiro",["master","admin"]],
@@ -2049,23 +2068,30 @@ export default function App() {
         </div>
       </div>
       <div className="main">
-        {page==="dashboard"&&<Dashboard pdvs={pdvs} results={results} period={period}
-          allPeriods={allPeriods} revUuidMap={revUuidMap} userRole={userRole}
+        {page==="dashboard"&&<Dashboard pdvs={pdvs} results={results} period={period} activePeriod={activePeriod}
+          allPeriods={allPeriods} revUuidMap={revUuidMap} userRole={userRole} onSelectPeriod={handleSelectPeriod}
           onLoadPeriodResults={async(pid)=>{
             const res=await SB.loadResults(pid,revUuidMap);
             return res.map(r=>{const p=pdvs.find(x=>x.id===r.id);return {...r,name:p?.name||""};});
           }}/>}
         {page==="admin"&&role==="master"&&<AdminPanel userRole={userRole}/>}
-        {page==="historico"&&<Historico periods={allPeriods} activePeriod={activePeriod}
-          onSelectPeriod={handleSelectPeriod} onCreatePeriod={handleCreatePeriod} onUpdatePeriod={handleUpdatePeriod}
-          onDeletePeriod={handleDeletePeriod} userRole={userRole}/>}
-        {page==="pendencias"&&<Pendencias pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
-          savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
-          userRole={userRole} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
+        {page==="historico"&&<>
+          <Historico periods={allPeriods} activePeriod={activePeriod}
+            onSelectPeriod={handleSelectPeriod} onCreatePeriod={handleCreatePeriod} onUpdatePeriod={handleUpdatePeriod}
+            onDeletePeriod={handleDeletePeriod} userRole={userRole}/>
+          {activePeriod?<div style={{marginTop:24,paddingTop:20,borderTop:"2px solid var(--color-border-secondary)"}}>
+            <Pendencias pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
+              savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
+              userRole={userRole} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>
+          </div>:<div className="card empty" style={{marginTop:16,textAlign:"center",fontSize:13,padding:20}}>
+            Selecione um período acima para ver as pendências.
+          </div>}
+        </>}
         {page==="pdvs"&&<PdvManager pdvs={pdvs} setPdvs={setPdvs} save={savePdvsToSB}/>}
         {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB}/>}
         {page==="calcular"&&<CalcResults pdvs={pdvs} md={md} results={results} setResults={setResults} save={saveResultsToSB} period={period}/>}
-        {page==="demo"&&<Demonstrativo pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave} period={period}
+        {page==="demo"&&<Demonstrativo pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
+          period={period} activePeriod={activePeriod} allPeriods={allPeriods} onSelectPeriod={handleSelectPeriod}
           savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
           userRole={userRole} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
         {page==="fin"&&<Financeiro pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} results={results} period={period}
