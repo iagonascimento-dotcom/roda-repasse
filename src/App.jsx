@@ -212,12 +212,57 @@ const SB = {
       body:JSON.stringify({status,reviewed_by:reviewerId,reviewed_at:new Date().toISOString()}),
       headers:{"Prefer":"return=minimal"}});
   },
+  /* Audit log */
+  async logAudit(entry){
+    try{
+      await this.api("/rest/v1/audit_log",{method:"POST",
+        body:JSON.stringify(entry),headers:{"Prefer":"return=minimal"}});
+    }catch(e){console.error("Audit log error:",e);}
+  },
+  async logAuditBatch(entries){
+    if(!entries.length)return;
+    try{
+      await this.api("/rest/v1/audit_log",{method:"POST",
+        body:JSON.stringify(entries),headers:{"Prefer":"return=minimal"}});
+    }catch(e){console.error("Audit batch error:",e);}
+  },
+  async loadAuditLog(filters={}){
+    let q="/rest/v1/audit_log?select=*&order=created_at.desc&limit=500";
+    if(filters.email) q+=`&user_email=eq.${encodeURIComponent(filters.email)}`;
+    if(filters.acao) q+=`&acao=eq.${encodeURIComponent(filters.acao)}`;
+    if(filters.from) q+=`&created_at=gte.${filters.from}`;
+    if(filters.to) q+=`&created_at=lte.${filters.to}`;
+    if(filters.search) q+=`&or=(entidade_nome.ilike.*${encodeURIComponent(filters.search)}*,descricao.ilike.*${encodeURIComponent(filters.search)}*)`;
+    return this.api(q);
+  },
 };
 
 /* ─── Token persistence via localStorage ─── */
 async function tokenGet(){try{const r=localStorage.getItem("sb-session");return r?JSON.parse(r):null;}catch{return null;}}
 async function tokenSet(d){try{localStorage.setItem("sb-session",JSON.stringify(d));}catch(e){console.error(e);}}
 async function tokenClear(){try{localStorage.removeItem("sb-session");}catch{}}
+
+/* ─── Audit helper ─── */
+function audit(acao,details={}){
+  const u=SB.currentUser||{email:"",nome:""};
+  return SB.logAudit({
+    user_email:u.email,user_nome:u.nome,acao,
+    entidade:details.entidade||"",entidade_nome:details.entidade_nome||"",
+    campo:details.campo||"",valor_antigo:String(details.valor_antigo??""),
+    valor_novo:String(details.valor_novo??""),periodo_nome:details.periodo_nome||"",
+    descricao:details.descricao||""
+  });
+}
+function auditBatch(acao,items,periodoNome){
+  const u=SB.currentUser||{email:"",nome:""};
+  const entries=items.map(it=>({
+    user_email:u.email,user_nome:u.nome,acao,
+    entidade:it.entidade||"",entidade_nome:it.entidade_nome||"",
+    campo:it.campo||"",valor_antigo:String(it.valor_antigo??""),
+    valor_novo:String(it.valor_novo??""),periodo_nome:periodoNome||"",descricao:it.descricao||""
+  }));
+  return SB.logAuditBatch(entries);
+}
 
 /* ─── Calculation engine ─── */
 function calc(pdv, ms, me, rev, eBillCond) {
@@ -1450,6 +1495,9 @@ function AdminPanel({userRole,onRefresh}){
   const [loading,setLoading]=useState(true);
   const [editId,setEditId]=useState(null);
   const [editFields,setEditFields]=useState({});
+  const [auditRows,setAuditRows]=useState([]);
+  const [auditLoading,setAuditLoading]=useState(false);
+  const [aFilter,setAFilter]=useState({email:"",acao:"",from:"",to:"",search:""});
 
   const ROLES=[{k:"master",l:"Master",c:"#f2401a"},{k:"admin",l:"Administrador",c:"#00314f"},
     {k:"usuario",l:"Usuário",c:"#ff8b00"},{k:"view",l:"Visualizador",c:"#9bf400"},{k:"pendente",l:"Pendente",c:"#999"}];
@@ -1477,9 +1525,30 @@ function AdminPanel({userRole,onRefresh}){
   }
 
   async function reviewReq(req,status){
-    try{await SB.reviewChangeRequest(req.id,status,userRole.user_id);await load();
+    try{await SB.reviewChangeRequest(req.id,status,userRole.user_id);
+      audit(status==="aprovado"?"Aprovou solicitação":"Rejeitou solicitação",
+        {entidade:req.tipo==="pdv_edit"?"PDV":"Dados mensais",entidade_nome:req.pdv_nome,
+         campo:req.campo,valor_antigo:req.valor_atual,valor_novo:req.valor_novo,
+         descricao:`Solicitado por ${req.requester_nome||req.requester_email}`});
+      await load();
     }catch(e){alert("Erro: "+e.message);}
   }
+
+  async function loadAudit(){
+    setAuditLoading(true);
+    try{
+      const f={};
+      if(aFilter.email)f.email=aFilter.email;
+      if(aFilter.acao)f.acao=aFilter.acao;
+      if(aFilter.from)f.from=new Date(aFilter.from+"T00:00:00").toISOString();
+      if(aFilter.to)f.to=new Date(aFilter.to+"T23:59:59").toISOString();
+      if(aFilter.search)f.search=aFilter.search;
+      const rows=await SB.loadAuditLog(f);
+      setAuditRows(rows||[]);
+    }catch(e){console.error(e);alert("Erro ao carregar histórico: "+e.message);}
+    setAuditLoading(false);
+  }
+  useEffect(()=>{if(tab==="audit"&&auditRows.length===0)loadAudit();},[tab]);
 
   const roleBadge=(r)=>{const rd=ROLES.find(x=>x.k===r)||{l:r,c:"#999"};
     return <span className="badge" style={{background:rd.c+"22",color:rd.c,fontWeight:600}}>{rd.l}</span>;};
@@ -1499,6 +1568,7 @@ function AdminPanel({userRole,onRefresh}){
         Solicitações{pendingCount>0&&<span className="badge badge-danger" style={{marginLeft:6}}>{pendingCount}</span>}
       </div>
       <div className={`tab ${tab==="perms"?"active":""}`} onClick={()=>setTab("perms")}>Permissões</div>
+      <div className={`tab ${tab==="audit"?"active":""}`} onClick={()=>setTab("audit")}>Histórico de edições</div>
     </div>
 
     {tab==="users"&&<>
@@ -1572,6 +1642,58 @@ function AdminPanel({userRole,onRefresh}){
         </tbody>
       </table></div>
     </div>}
+
+    {tab==="audit"&&<div>
+      <div className="card" style={{marginBottom:12}}>
+        <div className="h3">Filtros</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div><label style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:3}}>Usuário (email)</label>
+            <input type="text" value={aFilter.email} onChange={e=>setAFilter({...aFilter,email:e.target.value})} placeholder="todos"
+              style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,minWidth:160}}/></div>
+          <div><label style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:3}}>Ação</label>
+            <select value={aFilter.acao} onChange={e=>setAFilter({...aFilter,acao:e.target.value})}
+              style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,minWidth:160}}>
+              <option value="">Todas</option>
+              <option>Editou cadastro PDV</option><option>Editou dados mensais</option>
+              <option>Importou dados mensais</option><option>Calculou repasse</option>
+              <option>Criou período</option><option>Excluiu período</option><option>Fechou período</option>
+              <option>Entregou dia 20</option><option>Entregou dia 3</option>
+              <option>Aprovou solicitação</option><option>Rejeitou solicitação</option>
+            </select></div>
+          <div><label style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:3}}>De</label>
+            <input type="date" value={aFilter.from} onChange={e=>setAFilter({...aFilter,from:e.target.value})}
+              style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13}}/></div>
+          <div><label style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:3}}>Até</label>
+            <input type="date" value={aFilter.to} onChange={e=>setAFilter({...aFilter,to:e.target.value})}
+              style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13}}/></div>
+          <div><label style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:3}}>Buscar PDV</label>
+            <input type="text" value={aFilter.search} onChange={e=>setAFilter({...aFilter,search:e.target.value})} placeholder="nome do PDV"
+              style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,minWidth:140}}/></div>
+          <button className="btn btn-p" onClick={loadAudit} disabled={auditLoading}>{auditLoading?"Buscando...":"🔍 Buscar"}</button>
+          <button className="btn btn-s" onClick={()=>{setAFilter({email:"",acao:"",from:"",to:"",search:""});}}>Limpar</button>
+        </div>
+      </div>
+      <div className="card">
+        <div className="h3">Histórico de edições ({auditRows.length})</div>
+        {auditLoading?<div className="empty">Carregando...</div>:
+          auditRows.length===0?<div className="empty">Nenhum registro encontrado</div>:
+          <div className="scroll-x"><table>
+            <thead><tr><th>Data/Hora</th><th>Usuário</th><th>Ação</th><th>Item</th><th>Campo</th><th>Antes → Depois</th><th>Período</th></tr></thead>
+            <tbody>{auditRows.map(r=>
+              <tr key={r.id}>
+                <td className="mono" style={{fontSize:11,whiteSpace:"nowrap"}}>{new Date(r.created_at).toLocaleString("pt-BR")}</td>
+                <td style={{fontSize:12}}><div style={{fontWeight:600}}>{r.user_nome||"—"}</div><div style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{r.user_email}</div></td>
+                <td><span className="chip" style={{fontSize:10}}>{r.acao}</span></td>
+                <td className="trunc" style={{fontSize:12,fontWeight:500}}>{r.entidade_nome||"—"}</td>
+                <td style={{fontSize:12}}>{r.campo||"—"}</td>
+                <td style={{fontSize:11}}>{r.campo?<span><span style={{color:"var(--color-text-tertiary)"}}>{r.valor_antigo||"(vazio)"}</span> → <strong>{r.valor_novo}</strong></span>:(r.descricao||"—")}</td>
+                <td style={{fontSize:11}}>{r.periodo_nome||"—"}</td>
+              </tr>
+            )}</tbody>
+          </table></div>}
+        <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:8}}>Mostrando até 500 registros mais recentes.</div>
+      </div>
+    </div>}
   </div>;
 }
 
@@ -1641,6 +1763,7 @@ export default function App() {
         let ur=await SB.loadUserRole(authEmail);
         if(!ur){await SB.ensureUserRole(null,authEmail);ur=await SB.loadUserRole(authEmail);}
         setUserRole(ur);
+        SB.currentUser={email:ur?.email||authEmail,nome:ur?.nome||""};
         if(!ur||ur.role==="pendente"){setReady(true);return;}
 
         setLoadMsg("Carregando PDVs...");
@@ -1671,10 +1794,22 @@ export default function App() {
   /* ─── Save helpers ─── */
   async function savePdvsToSB(newPdvs){
     setPdvs(newPdvs);
+    const auditItems=[];
+    const fieldLabels={name:"Nome",contract_type:"Tipo contrato",revenue_consideration:"Consideração receita",
+      negotiated_percentage:"% negociado",kwh_unity_price:"Preço kWh",minimal_repass:"Repasse mínimo",
+      payment_day:"Dia pagamento",bank_cnpj_cond:"CNPJ cond",bank_cnpj:"CNPJ",bank_name:"Nome conta",
+      bank_banco:"Banco",bank_agencia:"Agência",bank_conta:"Conta",bank_pix:"PIX"};
     for(const np of newPdvs){
       const op=pdvs.find(p=>p.id===np.id);
       if(!op||JSON.stringify(np)!==JSON.stringify(op)){
         if(np.uuid){
+          // Collect field-level changes for audit
+          if(op) Object.keys(fieldLabels).forEach(k=>{
+            if(String(np[k]??"")!==String(op[k]??"")){
+              auditItems.push({entidade:"PDV",entidade_nome:np.name,campo:fieldLabels[k],
+                valor_antigo:op[k],valor_novo:np[k]});
+            }
+          });
           try{await SB.patchPdv(np.uuid,{nome:np.name,contract_type:np.contract_type,
             revenue_consideration:np.revenue_consideration,negotiated_percentage:np.negotiated_percentage,
             kwh_unity_price:np.kwh_unity_price,minimal_repass:np.minimal_repass,
@@ -1684,25 +1819,38 @@ export default function App() {
         }
       }
     }
+    if(auditItems.length>0) auditBatch("Editou cadastro PDV",auditItems);
   }
 
   async function saveMdToSB(newMd){
+    const prevMd=md;
     setMd(newMd);
     if(!activePeriod){console.warn("No active period, skipping save");return;}
     // Collect all changed records for bulk upsert
-    const records=[];
+    const records=[];const auditItems=[];
+    const mdLabels={meter_start:"Medidor início",meter_end:"Medidor fim",raw_revenue:"Faturamento",
+      manual_adjustment:"Ajuste",energy_bill_cond:"Conta energia"};
     for(const[pid,data] of Object.entries(newMd)){
       const puuid=uuidMap[pid];
       if(!puuid){continue;}
-      // Always include if has any non-zero data
       const hasData=(data.meter_start||0)>0||(data.meter_end||0)>0||(data.raw_revenue||0)>0
         ||(data.manual_adjustment||0)!==0||(data.energy_bill_cond||0)>0;
       if(hasData) records.push({pdvUuid:puuid,data});
+      // Audit field-level changes
+      const old=prevMd[pid]||{};const pdv=pdvs.find(x=>x.id===pid);
+      Object.keys(mdLabels).forEach(k=>{
+        if((data[k]||0)!==(old[k]||0)){
+          auditItems.push({entidade:"Dados mensais",entidade_nome:pdv?.name||pid,campo:mdLabels[k],
+            valor_antigo:old[k]||0,valor_novo:data[k]||0});
+        }
+      });
     }
     if(records.length===0)return;
     try{
       await SB.bulkUpsertMonthly(activePeriod.id,records);
       console.log(`Saved ${records.length} monthly records to Supabase`);
+      if(auditItems.length>0&&auditItems.length<=50) auditBatch("Editou dados mensais",auditItems,activePeriod.nome);
+      else if(auditItems.length>50) audit("Importou dados mensais",{periodo_nome:activePeriod.nome,descricao:`${auditItems.length} campos atualizados em ${records.length} PDVs`});
     }catch(e){
       console.error("Bulk save error:",e);
       alert("Erro ao salvar no banco: "+e.message);
@@ -1712,7 +1860,11 @@ export default function App() {
   async function saveResultsToSB(res){
     setResults(res);
     if(!activePeriod)return;
-    try{await SB.saveAllResults(activePeriod.id,res,uuidMap);}catch(e){console.error("Save results error:",e);}
+    try{await SB.saveAllResults(activePeriod.id,res,uuidMap);
+      const tot=res.reduce((s,r)=>s+(r.total||0),0);
+      audit("Calculou repasse",{periodo_nome:activePeriod.nome,
+        descricao:`${res.length} PDVs calculados, total ${new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(tot)}`});
+    }catch(e){console.error("Save results error:",e);}
   }
 
   // No-op save for read-only roles
@@ -1725,6 +1877,7 @@ export default function App() {
       setAllPeriods(newPeriods);
       const created=newPeriods.find(x=>x.nome===nome)||p;
       setActivePeriod(created);setMd({});setResults([]);
+      audit("Criou período",{entidade:"Período",entidade_nome:nome,periodo_nome:nome});
     }catch(e){alert("Erro ao criar período: "+e.message);}
   }
 
@@ -1743,16 +1896,25 @@ export default function App() {
 
   async function handleUpdatePeriod(id,fields){
     try{
+      const p=allPeriods.find(x=>x.id===id);
       await SB.updatePeriod(id,fields);
       const newPeriods=await SB.loadPeriods();
       setAllPeriods(newPeriods);
       if(activePeriod?.id===id){setActivePeriod(newPeriods.find(x=>x.id===id));}
+      let acao="Atualizou período";
+      if(fields.status==="fechado") acao="Fechou período";
+      else if(fields.status_dia20==="entregue") acao="Entregou dia 20";
+      else if(fields.status_dia3==="entregue") acao="Entregou dia 3";
+      audit(acao,{entidade:"Período",entidade_nome:p?.nome||"",periodo_nome:p?.nome||""});
     }catch(e){alert("Erro: "+e.message);}
   }
 
   async function handleDeletePeriod(id){
     try{
+      const p=allPeriods.find(x=>x.id===id);
       await SB.deletePeriod(id);
+      audit("Excluiu período",{entidade:"Período",entidade_nome:p?.nome||"",periodo_nome:p?.nome||"",
+        descricao:"Período e todos os dados/resultados apagados permanentemente"});
       const newPeriods=await SB.loadPeriods();
       setAllPeriods(newPeriods);
       if(activePeriod?.id===id){
