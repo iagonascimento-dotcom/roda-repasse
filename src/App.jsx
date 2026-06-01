@@ -354,8 +354,12 @@ tr:hover { background: var(--color-background-secondary, #fafaf8); }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 `;
 
-function Stat({val,label,color}) {
-  return <div className="stat bdr-l" style={{borderLeftColor:color}}><div className="stat-val">{val}</div><div className="stat-lbl">{label}</div></div>;
+function Stat({val,label,color,sub}) {
+  return <div className="stat bdr-l" style={{borderLeftColor:color}}>
+    <div className="stat-val">{val}</div>
+    <div className="stat-lbl">{label}</div>
+    {sub&&<div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:2,fontWeight:600}}>{sub}</div>}
+  </div>;
 }
 function Field({label,children}) {
   return <div className="field"><label>{label}</label>{children}</div>;
@@ -482,6 +486,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const [compData,setCompData]=useState({});
   const [loadingComp,setLoadingComp]=useState(false);
   const [filterType,setFilterType]=useState(null);
+  const [filterRevCons,setFilterRevCons]=useState(null); // "Líquido" | "Bruto" | null
   const [compError,setCompError]=useState("");
   // Header range view: when from===to it's single period; when different it's aggregated
   const [viewFrom,setViewFrom]=useState("");
@@ -490,9 +495,9 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const [viewLoading,setViewLoading]=useState(false);
   const [viewMode,setViewMode]=useState("operacional"); // "operacional" or "pagamento"
 
-  // pdv id → payment_day map (for filtering in pagamento mode)
-  const pdvPayDay={};
-  pdvs.forEach(p=>{pdvPayDay[p.id]=p.payment_day;});
+  // pdv id → quick lookup maps
+  const pdvPayDay={};const pdvRevCons={};const pdvType={};
+  pdvs.forEach(p=>{pdvPayDay[p.id]=p.payment_day;pdvRevCons[p.id]=p.revenue_consideration;pdvType[p.id]=p.contract_type;});
 
   const canExport=userRole?.role==="master"||userRole?.role==="admin";
   const sortedPeriodsDesc=[...(allPeriods||[])].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes));
@@ -588,13 +593,40 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     return Object.values(acc);
   })();
 
-  const tot=aggResults.reduce((s,r)=>s+(r.total||0),0);
-  const totE=aggResults.reduce((s,r)=>s+(r.energyBill||0),0);
-  const totP=aggResults.reduce((s,r)=>s+(r.pctRevenue||0),0);
+  // Apply BOTH filters (type + revenue consideration)
+  function passesFilters(pdvId){
+    if(filterType&&pdvType[pdvId]!==filterType)return false;
+    if(filterRevCons&&pdvRevCons[pdvId]!==filterRevCons)return false;
+    return true;
+  }
+  const filteredResults=aggResults.filter(r=>passesFilters(r.id));
+
+  // Totals (filtered)
+  const tot=filteredResults.reduce((s,r)=>s+(r.total||0),0);
+  const totE=filteredResults.reduce((s,r)=>s+(r.energyBill||0),0);
+  const totP=filteredResults.reduce((s,r)=>s+(r.pctRevenue||0),0);
+  // Grand totals (unfiltered) for percentage of grand total
+  const grandTot=aggResults.reduce((s,r)=>s+(r.total||0),0);
+
+  // Active PDV count (respects filters)
+  const filteredPdvs=pdvs.filter(p=>p.contract_type!=="Boleto"&&passesFilters(p.id));
+  const active=filteredPdvs.length;
+  const totalActiveAll=pdvs.filter(p=>p.contract_type!=="Boleto").length;
+
+  // Counts by type (always show all types, but counts respect revCons filter)
   const byType={};
-  pdvs.forEach(p=>{if(p.contract_type!=="Boleto")byType[p.contract_type]=(byType[p.contract_type]||0)+1;});
-  const active=pdvs.filter(p=>p.contract_type!=="Boleto").length;
-  const filteredResults=filterType?aggResults.filter(r=>r.contract_type===filterType):aggResults;
+  pdvs.forEach(p=>{if(p.contract_type!=="Boleto"&&(!filterRevCons||p.revenue_consideration===filterRevCons))
+    byType[p.contract_type]=(byType[p.contract_type]||0)+1;});
+  // Counts by revenue consideration (respects type filter)
+  const byRevCons={};
+  pdvs.forEach(p=>{if(p.contract_type!=="Boleto"&&p.revenue_consideration&&(!filterType||p.contract_type===filterType))
+    byRevCons[p.revenue_consideration]=(byRevCons[p.revenue_consideration]||0)+1;});
+
+  // Percentages for cards
+  const pctOfGrand=grandTot>0?(tot/grandTot*100):0;
+  const pctActive=totalActiveAll>0?(active/totalActiveAll*100):0;
+  const pctEnergy=tot>0?(totE/tot*100):0;
+  const pctRev=tot>0?(totP/tot*100):0;
 
   // Sort periods chronologically (for comparison section below)
   const sortedPeriods=[...(allPeriods||[])].sort((a,b)=>(a.ano*12+a.mes)-(b.ano*12+b.mes));
@@ -651,7 +683,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   },[viewMode]);
 
   const selPeriods=compPeriods;
-  const allPdvNames=pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>({id:p.id,name:p.name}));
+  const allPdvNames=pdvs.filter(p=>p.contract_type!=="Boleto"&&passesFilters(p.id)).map(p=>({id:p.id,name:p.name}));
   // For each period column, compose value based on viewMode:
   // - operacional: total of this PDV in that period
   // - pagamento: total of this PDV in that period (only if payment_day=20) + total from previous period (only if payment_day=3)
@@ -727,10 +759,14 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
       ⚠ Para mostrar dia 3 pago em {missingPrev.join(", ")}, falta os dados do mês anterior. Crie o período anterior em Histórico.
     </div>}
     <div className="grid4" style={{marginBottom:16}}>
-      <Stat val={fmt(tot)} label="Total repasse" color="#00314f"/>
-      <Stat val={active} label="PDVs ativos" color="#9bf400"/>
-      <Stat val={fmt(totE)} label="Total energia" color="#ff8b00"/>
-      <Stat val={fmt(totP)} label="Total % fat." color="#00314f"/>
+      <Stat val={fmt(tot)} label="Total repasse" color="#00314f"
+        sub={(filterType||filterRevCons)&&grandTot>0?`${pctOfGrand.toFixed(1)}% do total`:null}/>
+      <Stat val={active} label="PDVs ativos" color="#9bf400"
+        sub={`${pctActive.toFixed(1)}% de ${totalActiveAll}`}/>
+      <Stat val={fmt(totE)} label="Total energia" color="#ff8b00"
+        sub={tot>0?`${pctEnergy.toFixed(1)}% do repasse`:null}/>
+      <Stat val={fmt(totP)} label="Total % fat." color="#00314f"
+        sub={tot>0?`${pctRev.toFixed(1)}% do repasse`:null}/>
     </div>
     <div className="card">
       <div className="h3">Por tipo de contrato {filterType&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtro: {filterType}) <span style={{cursor:"pointer",color:"var(--accent)"}} onClick={()=>setFilterType(null)}>✕ limpar</span></span>}</div>
@@ -742,6 +778,16 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
         )}
       </div>
     </div>
+    {Object.keys(byRevCons).length>0&&<div className="card">
+      <div className="h3">Por consideração de receita {filterRevCons&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtro: {filterRevCons}) <span style={{cursor:"pointer",color:"var(--accent)"}} onClick={()=>setFilterRevCons(null)}>✕ limpar</span></span>}</div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {Object.entries(byRevCons).sort((a,b)=>b[1]-a[1]).map(([t,c])=>
+          <span key={t} className="chip" onClick={()=>setFilterRevCons(filterRevCons===t?null:t)}
+            style={{padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:filterRevCons===t?700:400,
+              background:filterRevCons===t?(t==="Líquido"?"#3d7a00":"#ff8b00"):"",color:filterRevCons===t?"#fff":""}}>{t}: <strong>{c}</strong></span>
+        )}
+      </div>
+    </div>}
     {aggResults.length>0?<div className="card">
       <div className="h3">{filterType?`${filterType} (${filteredResults.length})`:`Top 10 maiores repasses${isAgg?" (somado)":""}`}</div>
       <table><thead><tr><th>PDV</th><th>Tipo</th><th>Valor{isAgg?" somado":""}</th></tr></thead>
@@ -769,7 +815,10 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
 
     {allPeriods&&allPeriods.length>0&&<div className="card">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-        <div className="h3" style={{margin:0}}>Comparar períodos {viewMode==="pagamento"&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>(por mês de pagamento)</span>}</div>
+        <div className="h3" style={{margin:0}}>Comparar períodos {(viewMode==="pagamento"||filterType||filterRevCons)&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>
+          {viewMode==="pagamento"&&"(por mês de pagamento)"}
+          {(filterType||filterRevCons)&&` (filtros: ${[filterType,filterRevCons].filter(Boolean).join(", ")})`}
+        </span>}</div>
         {canExport&&selPeriods.length>0&&compRows.length>0&&<button className="btn btn-s" onClick={exportCompCSV} style={{fontSize:11}}>⬇ Exportar CSV</button>}
       </div>
       <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>Selecione um intervalo de períodos para comparar valores por PDV:</p>
