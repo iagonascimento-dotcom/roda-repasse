@@ -1598,9 +1598,20 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
           ⚡ Entregar tudo (20 + 3)</button>}
         {bothDone&&activePeriod.status==="aberto"&&
           <button className="btn btn-p"
-            onClick={()=>confirmAction("Fechar período?",`Fechar "${activePeriod.nome}" definitivamente. Dados viram histórico consultável.`,
+            onClick={()=>confirmAction("Fechar período?",`Fechar "${activePeriod.nome}" definitivamente. O próximo mês será criado automaticamente.`,
               ()=>onUpdatePeriod(activePeriod.id,{status:"fechado"}))}>
             🔒 Fechar período</button>}
+        {canManage&&(()=>{
+          const nextMes=activePeriod.mes===12?1:activePeriod.mes+1;
+          const nextAno=activePeriod.mes===12?activePeriod.ano+1:activePeriod.ano;
+          const nextExists=periods.some(x=>x.mes===nextMes&&x.ano===nextAno);
+          const mesesNomes=["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+          const nextNome=`${mesesNomes[nextMes-1]} ${nextAno}`;
+          if(!nextExists&&(activePeriod.status==="fechado"||bothDone))
+            return <button className="btn btn-p" onClick={()=>confirmAction(`Criar ${nextNome}?`,`Criar o período seguinte (${nextNome}) e começar a trabalhar nele.`,
+              ()=>onCreatePeriod(nextNome,nextMes,nextAno))}>▶ Criar {nextNome}</button>;
+          return null;
+        })()}
       </div>}
     </div>;})()}
 
@@ -2042,9 +2053,30 @@ export default function App() {
     try{
       const p=allPeriods.find(x=>x.id===id);
       await SB.updatePeriod(id,fields);
-      const newPeriods=await SB.loadPeriods();
+      let newPeriods=await SB.loadPeriods();
+      let nextCreated=null;
+      // Auto-create next period when closing
+      if(fields.status==="fechado"&&p){
+        const nextMes=p.mes===12?1:p.mes+1;
+        const nextAno=p.mes===12?p.ano+1:p.ano;
+        const mesesNomes=["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+        const nextNome=`${mesesNomes[nextMes-1]} ${nextAno}`;
+        const exists=newPeriods.some(x=>x.mes===nextMes&&x.ano===nextAno);
+        if(!exists){
+          try{
+            await SB.createPeriod(nextNome,nextMes,nextAno);
+            newPeriods=await SB.loadPeriods();
+            nextCreated=newPeriods.find(x=>x.mes===nextMes&&x.ano===nextAno);
+            audit("Criou período",{entidade:"Período",entidade_nome:nextNome,periodo_nome:nextNome,descricao:"Criado automaticamente após fechamento do período anterior"});
+          }catch(e){console.error("Auto-create next period failed:",e);}
+        }
+      }
       setAllPeriods(newPeriods);
-      if(activePeriod?.id===id){setActivePeriod(newPeriods.find(x=>x.id===id));}
+      // If we just closed the current active period and a next was created, switch to it
+      if(activePeriod?.id===id){
+        if(nextCreated){setActivePeriod(nextCreated);setMd({});setResults([]);}
+        else{setActivePeriod(newPeriods.find(x=>x.id===id));}
+      }
       let acao="Atualizou período";
       if(fields.status==="fechado") acao="Fechou período";
       else if(fields.status_dia20==="entregue") acao="Entregou dia 20";
