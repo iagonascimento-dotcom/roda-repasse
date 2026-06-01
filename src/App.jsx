@@ -373,6 +373,40 @@ function ConfirmModal({msg,detail,onConfirm,onCancel}) {
   </div>;
 }
 
+function JustifyModal({changeCount,detail,onConfirm,onCancel}){
+  const [reason,setReason]=useState("");
+  const [err,setErr]=useState("");
+  function submit(){
+    if(reason.trim().length<10){setErr("Justifique com pelo menos 10 caracteres.");return;}
+    onConfirm(reason.trim());
+  }
+  return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",
+    justifyContent:"center",zIndex:999}} onClick={onCancel}>
+    <div style={{background:"#fff",borderRadius:12,padding:24,maxWidth:480,width:"90%",boxShadow:"0 20px 60px rgba(0,0,0,0.2)"}}
+      onClick={e=>e.stopPropagation()}>
+      <div style={{fontSize:15,fontWeight:700,marginBottom:6}}>📩 Solicitar alteração</div>
+      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>
+        Você está pedindo {changeCount} alteração(ões). Explique o motivo para que o administrador aprove com mais facilidade.
+      </div>
+      {detail&&<div className="mono" style={{fontSize:11,background:"var(--color-background-secondary)",
+        borderRadius:6,padding:10,marginBottom:12,maxHeight:140,overflow:"auto",whiteSpace:"pre-wrap"}}>{detail}</div>}
+      <label style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:4}}>
+        Justificativa <span style={{color:"var(--warn)"}}>*</span>
+      </label>
+      <textarea value={reason} onChange={e=>{setReason(e.target.value);setErr("");}}
+        placeholder="Ex: Medidor estava com leitura errada, corrigi conforme o documento da concessionária"
+        rows={4} autoFocus
+        style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",
+          fontSize:13,fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}/>
+      {err&&<div style={{fontSize:11,color:"var(--warn)",marginTop:4}}>{err}</div>}
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+        <button className="btn btn-s" onClick={onCancel}>Cancelar</button>
+        <button className="btn btn-p" onClick={submit}>Enviar solicitação</button>
+      </div>
+    </div>
+  </div>;
+}
+
 /* ─── Login Screen ─── */
 function LoginScreen({onAuth}){
   const [email,setEmail]=useState("");
@@ -1154,6 +1188,7 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
   const [pdvEdits,setPdvEdits]=useState({});
   const [mdEdits,setMdEdits]=useState({});
   const [confirm,setConfirm]=useState(null);
+  const [justify,setJustify]=useState(null);
   const [filter,setFilter]=useState("all");
 
   const changeCount=Object.values(pdvEdits).reduce((s,e)=>s+Object.keys(e).length,0)
@@ -1245,12 +1280,12 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
     if(changes.length===0){setEditMode(false);setPdvEdits({});setMdEdits({});return;}
 
     if(isUsuario&&onRequestChange){
-      setConfirm({msg:`Enviar ${changeReqs.length} solicitação(ões) de alteração?`,detail:changes.join("\n"),
-        onConfirm:async()=>{
-          try{for(const r of changeReqs) await onRequestChange(r);
+      setJustify({changeCount:changeReqs.length,detail:changes.join("\n"),
+        onConfirm:async(reason)=>{
+          try{for(const r of changeReqs) await onRequestChange({...r,justificativa:reason});
             alert("Solicitações enviadas! Aguarde aprovação do administrador.");
           }catch(e){alert("Erro: "+e.message);}
-          setConfirm(null);setEditMode(false);setPdvEdits({});setMdEdits({});
+          setJustify(null);setEditMode(false);setPdvEdits({});setMdEdits({});
         }
       });
     }else{
@@ -1268,6 +1303,7 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
 
   return <div className="fade-in">
     {confirm&&<ConfirmModal msg={confirm.msg} detail={confirm.detail} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
+    {justify&&<JustifyModal changeCount={justify.changeCount} detail={justify.detail} onConfirm={justify.onConfirm} onCancel={()=>setJustify(null)}/>}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
       <div className="h2">Pendências</div>
       <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -1435,6 +1471,7 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
   const [localMd,setLocalMd]=useState({});
   const [localPdvEdits,setLocalPdvEdits]=useState({});
   const [confirm,setConfirm]=useState(null);
+  const [justify,setJustify]=useState(null);
   const [changeCount,setChangeCount]=useState(0);
   useEffect(()=>{if(onDirty)onDirty(editMode?changeCount:0);},[changeCount,editMode]);
 
@@ -1477,11 +1514,11 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
     if(changes.length===0){setEditMode(false);return;}
 
     if(isUsuario&&onRequestChange){
-      setConfirm({msg:`Enviar ${changeReqs.length} solicitação(ões)?`,detail:changes.join("\n"),onConfirm:async()=>{
-        try{for(const r of changeReqs) await onRequestChange(r);
+      setJustify({changeCount:changeReqs.length,detail:changes.join("\n"),onConfirm:async(reason)=>{
+        try{for(const r of changeReqs) await onRequestChange({...r,justificativa:reason});
           alert("Solicitações enviadas! Aguarde aprovação do administrador.");
         }catch(e){alert("Erro: "+e.message);}
-        setConfirm(null);setEditMode(false);setChangeCount(0);}});
+        setJustify(null);setEditMode(false);setChangeCount(0);}});
     }else{
       setConfirm({msg:`${changes.length} PDV(s) serão alterados:`,detail:changes.join("\n"),onConfirm:()=>{
         const newMdAll={...md};Object.entries(localMd).forEach(([pid,data])=>{newMdAll[pid]={...(newMdAll[pid]||{}),...data};});setMd(newMdAll);saveMd(newMdAll);
@@ -1515,6 +1552,7 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
 
   return <div className="fade-in">
     {confirm&&<ConfirmModal msg={confirm.msg} detail={confirm.detail} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
+    {justify&&<JustifyModal changeCount={justify.changeCount} detail={justify.detail} onConfirm={justify.onConfirm} onCancel={()=>setJustify(null)}/>}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
       <div className="h2">Demonstrativo por tipo</div>
       <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -1773,7 +1811,7 @@ function AdminPanel({userRole,onRefresh}){
       audit(status==="aprovado"?"Aprovou solicitação":"Rejeitou solicitação",
         {entidade:req.tipo==="pdv_edit"?"PDV":"Dados mensais",entidade_nome:req.pdv_nome,
          campo:req.campo,valor_antigo:req.valor_atual,valor_novo:req.valor_novo,
-         descricao:`Solicitado por ${req.requester_nome||req.requester_email}`});
+         descricao:`Solicitado por ${req.requester_nome||req.requester_email}${req.justificativa?` — Justificativa: "${req.justificativa}"`:""}`});
       await load();
     }catch(e){alert("Erro: "+e.message);}
   }
@@ -1850,14 +1888,14 @@ function AdminPanel({userRole,onRefresh}){
     {tab==="requests"&&<>
       {requests.length===0?<div className="card empty">Nenhuma solicitação de alteração</div>:
       <div className="card" style={{padding:0,overflow:"hidden"}}><div className="scroll-x"><table>
-        <thead><tr><th>Solicitante</th><th>PDV</th><th>Campo</th><th>De</th><th>Para</th><th>Descrição</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Solicitante</th><th>PDV</th><th>Campo</th><th>De</th><th>Para</th><th>Justificativa</th><th>Status</th><th></th></tr></thead>
         <tbody>{requests.map(r=><tr key={r.id} style={r.status==="pendente"?{background:"var(--orange-bg)"}:{}}>
           <td style={{fontSize:11}}>{r.requester_nome||r.requester_email}</td>
           <td className="trunc" style={{fontSize:11}}>{r.pdv_nome||r.pdv_vmpay_id}</td>
           <td className="mono" style={{fontSize:11}}>{r.campo}</td>
           <td className="mono" style={{fontSize:11}}>{r.valor_atual||"—"}</td>
           <td className="mono" style={{fontSize:11,fontWeight:600}}>{r.valor_novo}</td>
-          <td style={{fontSize:11,maxWidth:150,overflow:"hidden",textOverflow:"ellipsis"}}>{r.descricao||"—"}</td>
+          <td style={{fontSize:11,maxWidth:240,whiteSpace:"normal",fontStyle:r.justificativa?"normal":"italic",color:r.justificativa?"inherit":"var(--color-text-tertiary)"}}>{r.justificativa||"—"}</td>
           <td>{r.status==="pendente"?<span className="badge badge-warn">Pendente</span>
             :r.status==="aprovado"?<span className="badge badge-ok">Aprovado</span>
             :<span className="badge badge-danger">Rejeitado</span>}</td>
