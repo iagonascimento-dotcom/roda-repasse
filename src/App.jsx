@@ -487,7 +487,29 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const [loadingComp,setLoadingComp]=useState(false);
   const [filterType,setFilterType]=useState(null);
   const [filterRevCons,setFilterRevCons]=useState(null); // "Líquido" | "Bruto" | null
-  const [searchPdv,setSearchPdv]=useState("");
+  const [searchPdvs,setSearchPdvs]=useState([]); // array of strings (selected PDV names/terms)
+  const [searchInput,setSearchInput]=useState("");
+  const [searchOpen,setSearchOpen]=useState(false);
+  // Cards collapsed state (persists in localStorage)
+  const [cardsCollapsed,setCardsCollapsed]=useState(()=>{
+    try{const raw=localStorage.getItem("dash-cards-collapsed");return raw?JSON.parse(raw):{};}catch{return {};}
+  });
+  function toggleCard(key){
+    setCardsCollapsed(prev=>{
+      const next={...prev,[key]:!prev[key]};
+      try{localStorage.setItem("dash-cards-collapsed",JSON.stringify(next));}catch{}
+      return next;
+    });
+  }
+  // Small reusable chevron button used inside each card title
+  const Chevron=({k})=>{
+    const closed=!!cardsCollapsed[k];
+    return <span onClick={(e)=>{e.stopPropagation();toggleCard(k);}}
+      title={closed?"Expandir":"Recolher"}
+      style={{cursor:"pointer",padding:"2px 8px",fontSize:14,color:"var(--color-text-secondary)",
+        userSelect:"none",borderRadius:6,transition:"transform 0.18s",display:"inline-block",
+        transform:closed?"rotate(-90deg)":"rotate(0deg)"}}>▾</span>;
+  };
   const [compError,setCompError]=useState("");
   // Header range view: when from===to it's single period; when different it's aggregated
   const [viewFrom,setViewFrom]=useState("");
@@ -500,8 +522,16 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const pdvPayDay={};const pdvRevCons={};const pdvType={};const pdvName={};
   pdvs.forEach(p=>{pdvPayDay[p.id]=p.payment_day;pdvRevCons[p.id]=p.revenue_consideration;pdvType[p.id]=p.contract_type;pdvName[p.id]=(p.name||"").toLowerCase();});
 
-  // Parse search terms (comma or space separated, supports multiple)
-  const searchTerms=searchPdv.trim().toLowerCase().split(/[,\s]+/).filter(Boolean);
+  // Search terms = selected chips (lowercased for matching)
+  const searchTerms=searchPdvs.map(s=>s.toLowerCase()).filter(Boolean);
+  // Live dropdown suggestions based on what user is typing
+  const searchSuggestions=(()=>{
+    const q=searchInput.trim().toLowerCase();
+    if(q.length<2)return [];
+    return pdvs.filter(p=>p.contract_type!=="Boleto"&&(p.name||"").toLowerCase().includes(q)
+      &&!searchPdvs.some(s=>s.toLowerCase()===p.name.toLowerCase()))
+      .slice(0,12);
+  })();
 
   const canExport=userRole?.role==="master"||userRole?.role==="admin";
   const sortedPeriodsDesc=[...(allPeriods||[])].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes));
@@ -777,41 +807,83 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
       <Stat val={fmt(totP)} label="Total % fat." color="#00314f"
         sub={tot>0?`${pctRev.toFixed(1)}% do repasse`:null}/>
     </div>
-    <div className="card">
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,flexWrap:"wrap",gap:8}}>
-        <div className="h3" style={{margin:0}}>Buscar PDV {searchPdv&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtrando: {searchTerms.length} termo(s))</span>}</div>
-        {searchPdv&&<span style={{cursor:"pointer",color:"var(--accent)",fontSize:11,fontWeight:600}} onClick={()=>setSearchPdv("")}>✕ limpar</span>}
+    <div className="card" style={{position:"relative"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:cardsCollapsed.search?0:8,flexWrap:"wrap",gap:8}}>
+        <div className="h3" style={{margin:0,display:"flex",alignItems:"center",gap:4}}><Chevron k="search"/>Buscar PDV {searchPdvs.length>0&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>({searchPdvs.length} selecionado(s))</span>}</div>
+        {searchPdvs.length>0&&<span style={{cursor:"pointer",color:"var(--accent)",fontSize:11,fontWeight:600}} onClick={()=>{setSearchPdvs([]);setSearchInput("");}}>✕ limpar todos</span>}
       </div>
-      <input type="text" value={searchPdv} onChange={e=>setSearchPdv(e.target.value)}
-        placeholder="Digite parte do nome (ex: GRAGOATA, MAYAN). Separe por vírgula para buscar vários"
-        style={{width:"100%",padding:"8px 12px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,boxSizing:"border-box"}}/>
-      {searchTerms.length>0&&<div style={{fontSize:11,color:"var(--color-text-secondary)",marginTop:6}}>
-        {filteredResults.length>0?`${filteredPdvs.length} PDV(s) encontrado(s)`:`Nenhum PDV encontrado`}
+      {!cardsCollapsed.search&&<>
+      <div onClick={e=>{if(e.target.tagName!=="INPUT"){const inp=e.currentTarget.querySelector("input");if(inp)inp.focus();}}}
+        style={{display:"flex",flexWrap:"wrap",gap:5,padding:"6px 8px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",cursor:"text",minHeight:38,alignItems:"center",background:"#fff"}}>
+        {searchPdvs.map((s,i)=>
+          <span key={i} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"3px 4px 3px 9px",borderRadius:6,
+            background:"var(--accent)",color:"#fff",fontSize:12,fontWeight:600}}>{s}
+            <span onClick={()=>setSearchPdvs(searchPdvs.filter((_,j)=>j!==i))}
+              style={{cursor:"pointer",padding:"0 5px",fontWeight:400,opacity:0.8}}>×</span>
+          </span>
+        )}
+        <input type="text" value={searchInput}
+          onChange={e=>{setSearchInput(e.target.value);setSearchOpen(true);}}
+          onFocus={()=>setSearchOpen(true)}
+          onBlur={()=>setTimeout(()=>setSearchOpen(false),180)}
+          onKeyDown={e=>{
+            if(e.key==="Enter"&&searchInput.trim()){
+              // First try to pick top suggestion, otherwise add raw text
+              const top=searchSuggestions[0];
+              if(top){setSearchPdvs([...searchPdvs,top.name]);}
+              else{setSearchPdvs([...searchPdvs,searchInput.trim()]);}
+              setSearchInput("");
+              e.preventDefault();
+            }
+            if(e.key==="Backspace"&&!searchInput&&searchPdvs.length>0){
+              setSearchPdvs(searchPdvs.slice(0,-1));
+            }
+          }}
+          placeholder={searchPdvs.length===0?"Digite 2+ caracteres (ex: GRAGOATA, MAYAN)":""}
+          style={{border:"none",outline:"none",fontSize:13,flex:1,minWidth:140,padding:"4px 2px",background:"transparent"}}/>
+      </div>
+      {searchOpen&&searchSuggestions.length>0&&<div style={{position:"absolute",top:"100%",left:16,right:16,marginTop:4,
+        background:"#fff",border:"1px solid var(--color-border-tertiary)",borderRadius:8,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",
+        maxHeight:260,overflowY:"auto",zIndex:50}}>
+        {searchSuggestions.map(p=>
+          <div key={p.id} onMouseDown={()=>{setSearchPdvs([...searchPdvs,p.name]);setSearchInput("");}}
+            style={{padding:"8px 12px",fontSize:13,cursor:"pointer",borderBottom:"1px solid var(--color-border-tertiary)"}}
+            onMouseEnter={e=>e.currentTarget.style.background="var(--color-background-secondary)"}
+            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+            <div style={{fontWeight:500}}>{p.name}</div>
+            <div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:1}}>{p.contract_type} • {p.revenue_consideration||"—"}</div>
+          </div>
+        )}
       </div>}
+      {searchInput.length>0&&searchInput.length<2&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:6}}>Digite 2 ou mais caracteres</div>}
+      {searchPdvs.length>0&&<div style={{fontSize:11,color:"var(--color-text-secondary)",marginTop:6}}>
+        {filteredPdvs.length} PDV(s) encontrado(s) com {searchPdvs.length} filtro(s) ativos
+      </div>}
+      </>}
     </div>
     <div className="card">
-      <div className="h3">Por tipo de contrato {filterType&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtro: {filterType}) <span style={{cursor:"pointer",color:"var(--accent)"}} onClick={()=>setFilterType(null)}>✕ limpar</span></span>}</div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+      <div className="h3" style={{display:"flex",alignItems:"center",gap:4,marginBottom:cardsCollapsed.types?0:8}}><Chevron k="types"/>Por tipo de contrato {filterType&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtro: {filterType}) <span style={{cursor:"pointer",color:"var(--accent)"}} onClick={()=>setFilterType(null)}>✕ limpar</span></span>}</div>
+      {!cardsCollapsed.types&&<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
         {Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([t,c])=>
           <span key={t} className="chip" onClick={()=>setFilterType(filterType===t?null:t)}
             style={{padding:"4px 10px",fontSize:11,cursor:"pointer",
               background:filterType===t?"var(--accent)":"",color:filterType===t?"#fff":""}}>{t}: <strong>{c}</strong></span>
         )}
-      </div>
+      </div>}
     </div>
     {Object.keys(byRevCons).length>0&&<div className="card">
-      <div className="h3">Por consideração de receita {filterRevCons&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtro: {filterRevCons}) <span style={{cursor:"pointer",color:"var(--accent)"}} onClick={()=>setFilterRevCons(null)}>✕ limpar</span></span>}</div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+      <div className="h3" style={{display:"flex",alignItems:"center",gap:4,marginBottom:cardsCollapsed.revcons?0:8}}><Chevron k="revcons"/>Por consideração de receita {filterRevCons&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtro: {filterRevCons}) <span style={{cursor:"pointer",color:"var(--accent)"}} onClick={()=>setFilterRevCons(null)}>✕ limpar</span></span>}</div>
+      {!cardsCollapsed.revcons&&<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
         {Object.entries(byRevCons).sort((a,b)=>b[1]-a[1]).map(([t,c])=>
           <span key={t} className="chip" onClick={()=>setFilterRevCons(filterRevCons===t?null:t)}
             style={{padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:filterRevCons===t?700:400,
               background:filterRevCons===t?(t==="Líquido"?"#3d7a00":"#ff8b00"):"",color:filterRevCons===t?"#fff":""}}>{t}: <strong>{c}</strong></span>
         )}
-      </div>
+      </div>}
     </div>}
     {aggResults.length>0?<div className="card">
-      <div className="h3">{filterType?`${filterType} (${filteredResults.length})`:`Top 10 maiores repasses${isAgg?" (somado)":""}`}</div>
-      <table><thead><tr><th>PDV</th><th>Tipo</th><th>Valor{isAgg?" somado":""}</th></tr></thead>
+      <div className="h3" style={{display:"flex",alignItems:"center",gap:4,marginBottom:cardsCollapsed.top?0:8}}><Chevron k="top"/>{filterType?`${filterType} (${filteredResults.length})`:`Top 10 maiores repasses${isAgg?" (somado)":""}`}</div>
+      {!cardsCollapsed.top&&<><table><thead><tr><th>PDV</th><th>Tipo</th><th>Valor{isAgg?" somado":""}</th></tr></thead>
       <tbody>{[...filteredResults].sort((a,b)=>b.total-a.total).slice(0,filterType?999:10).map((r,i)=>
         <tr key={i}><td className="trunc" style={{fontWeight:500}}>{r.name}</td>
         <td><span className="chip">{r.contract_type}</span></td>
@@ -819,6 +891,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
       )}</tbody></table>
       {filterType&&<div style={{fontSize:12,fontWeight:700,textAlign:"right",padding:"8px 4px",color:"var(--accent)"}}>
         Total {filterType}{isAgg?" (somado)":""}: {fmt(filteredResults.reduce((s,r)=>s+r.total,0))}</div>}
+      </>}
     </div>:filterType?<div className="card">
       <div className="h3">PDVs do tipo "{filterType}" ({pdvs.filter(p=>p.contract_type===filterType).length})</div>
       <p style={{fontSize:11,color:"var(--color-text-secondary)",marginBottom:8}}>Resultados ainda não calculados para este período. Mostrando configuração:</p>
@@ -835,14 +908,15 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     </div>}
 
     {allPeriods&&allPeriods.length>0&&<div className="card">
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-        <div className="h3" style={{margin:0}}>Comparar períodos {(viewMode==="pagamento"||filterType||filterRevCons||searchTerms.length>0)&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:cardsCollapsed.compare?0:8}}>
+        <div className="h3" style={{margin:0,display:"flex",alignItems:"center",gap:4}}><Chevron k="compare"/>Comparar períodos {(viewMode==="pagamento"||filterType||filterRevCons||searchTerms.length>0)&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>
           {viewMode==="pagamento"&&"(por mês de pagamento)"}
           {(filterType||filterRevCons)&&` (filtros: ${[filterType,filterRevCons].filter(Boolean).join(", ")})`}
           {searchTerms.length>0&&` (busca: ${searchTerms.join(", ")})`}
         </span>}</div>
-        {canExport&&selPeriods.length>0&&compRows.length>0&&<button className="btn btn-s" onClick={exportCompCSV} style={{fontSize:11}}>⬇ Exportar CSV</button>}
+        {canExport&&selPeriods.length>0&&compRows.length>0&&!cardsCollapsed.compare&&<button className="btn btn-s" onClick={exportCompCSV} style={{fontSize:11}}>⬇ Exportar CSV</button>}
       </div>
+      {!cardsCollapsed.compare&&<>
       <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>Selecione um intervalo de períodos para comparar valores por PDV:</p>
       <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap",marginBottom:16}}>
         <div>
@@ -884,6 +958,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
       </table></div>}
       {selPeriods.length>0&&compRows.length===0&&!loadingComp&&<div className="empty">Nenhum resultado calculado nos períodos selecionados. Rode o cálculo na aba Calcular primeiro.</div>}
       {selPeriods.length===0&&!loadingComp&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",textAlign:"center",padding:16}}>Selecione "De" e "Até" e clique em Comparar</div>}
+      </>}
     </div>}
   </div>;
 }
