@@ -487,6 +487,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const [loadingComp,setLoadingComp]=useState(false);
   const [filterType,setFilterType]=useState(null);
   const [filterRevCons,setFilterRevCons]=useState(null); // "Líquido" | "Bruto" | null
+  const [searchPdv,setSearchPdv]=useState("");
   const [compError,setCompError]=useState("");
   // Header range view: when from===to it's single period; when different it's aggregated
   const [viewFrom,setViewFrom]=useState("");
@@ -496,8 +497,11 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const [viewMode,setViewMode]=useState("operacional"); // "operacional" or "pagamento"
 
   // pdv id → quick lookup maps
-  const pdvPayDay={};const pdvRevCons={};const pdvType={};
-  pdvs.forEach(p=>{pdvPayDay[p.id]=p.payment_day;pdvRevCons[p.id]=p.revenue_consideration;pdvType[p.id]=p.contract_type;});
+  const pdvPayDay={};const pdvRevCons={};const pdvType={};const pdvName={};
+  pdvs.forEach(p=>{pdvPayDay[p.id]=p.payment_day;pdvRevCons[p.id]=p.revenue_consideration;pdvType[p.id]=p.contract_type;pdvName[p.id]=(p.name||"").toLowerCase();});
+
+  // Parse search terms (comma or space separated, supports multiple)
+  const searchTerms=searchPdv.trim().toLowerCase().split(/[,\s]+/).filter(Boolean);
 
   const canExport=userRole?.role==="master"||userRole?.role==="admin";
   const sortedPeriodsDesc=[...(allPeriods||[])].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes));
@@ -593,10 +597,15 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     return Object.values(acc);
   })();
 
-  // Apply BOTH filters (type + revenue consideration)
+  // Apply ALL filters (type + revenue consideration + name search)
   function passesFilters(pdvId){
     if(filterType&&pdvType[pdvId]!==filterType)return false;
     if(filterRevCons&&pdvRevCons[pdvId]!==filterRevCons)return false;
+    if(searchTerms.length>0){
+      const n=pdvName[pdvId]||"";
+      // match if ANY term is found in the name
+      if(!searchTerms.some(t=>n.includes(t)))return false;
+    }
     return true;
   }
   const filteredResults=aggResults.filter(r=>passesFilters(r.id));
@@ -769,6 +778,18 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
         sub={tot>0?`${pctRev.toFixed(1)}% do repasse`:null}/>
     </div>
     <div className="card">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,flexWrap:"wrap",gap:8}}>
+        <div className="h3" style={{margin:0}}>Buscar PDV {searchPdv&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtrando: {searchTerms.length} termo(s))</span>}</div>
+        {searchPdv&&<span style={{cursor:"pointer",color:"var(--accent)",fontSize:11,fontWeight:600}} onClick={()=>setSearchPdv("")}>✕ limpar</span>}
+      </div>
+      <input type="text" value={searchPdv} onChange={e=>setSearchPdv(e.target.value)}
+        placeholder="Digite parte do nome (ex: GRAGOATA, MAYAN). Separe por vírgula para buscar vários"
+        style={{width:"100%",padding:"8px 12px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,boxSizing:"border-box"}}/>
+      {searchTerms.length>0&&<div style={{fontSize:11,color:"var(--color-text-secondary)",marginTop:6}}>
+        {filteredResults.length>0?`${filteredPdvs.length} PDV(s) encontrado(s)`:`Nenhum PDV encontrado`}
+      </div>}
+    </div>
+    <div className="card">
       <div className="h3">Por tipo de contrato {filterType&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>(filtro: {filterType}) <span style={{cursor:"pointer",color:"var(--accent)"}} onClick={()=>setFilterType(null)}>✕ limpar</span></span>}</div>
       <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
         {Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([t,c])=>
@@ -815,9 +836,10 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
 
     {allPeriods&&allPeriods.length>0&&<div className="card">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-        <div className="h3" style={{margin:0}}>Comparar períodos {(viewMode==="pagamento"||filterType||filterRevCons)&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>
+        <div className="h3" style={{margin:0}}>Comparar períodos {(viewMode==="pagamento"||filterType||filterRevCons||searchTerms.length>0)&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>
           {viewMode==="pagamento"&&"(por mês de pagamento)"}
           {(filterType||filterRevCons)&&` (filtros: ${[filterType,filterRevCons].filter(Boolean).join(", ")})`}
+          {searchTerms.length>0&&` (busca: ${searchTerms.join(", ")})`}
         </span>}</div>
         {canExport&&selPeriods.length>0&&compRows.length>0&&<button className="btn btn-s" onClick={exportCompCSV} style={{fontSize:11}}>⬇ Exportar CSV</button>}
       </div>
