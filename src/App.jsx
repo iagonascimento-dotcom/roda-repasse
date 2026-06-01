@@ -447,6 +447,11 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const [viewTo,setViewTo]=useState("");
   const [viewData,setViewData]=useState({});
   const [viewLoading,setViewLoading]=useState(false);
+  const [viewMode,setViewMode]=useState("operacional"); // "operacional" or "pagamento"
+
+  // pdv id → payment_day map (for filtering in pagamento mode)
+  const pdvPayDay={};
+  pdvs.forEach(p=>{pdvPayDay[p.id]=p.payment_day;});
 
   const canExport=userRole?.role==="master"||userRole?.role==="admin";
   const sortedPeriodsDesc=[...(allPeriods||[])].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes));
@@ -470,14 +475,25 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
       .sort((a,b)=>(a.ano*12+a.mes)-(b.ano*12+b.mes));
   })();
   const isAgg=rangePeriods.length>1;
+  // In pagamento mode, also need to load the period before each one (for dia 3 from previous month)
+  function findPrevPeriod(p){
+    const prevMes=p.mes===1?12:p.mes-1;
+    const prevAno=p.mes===1?p.ano-1:p.ano;
+    return (allPeriods||[]).find(x=>x.mes===prevMes&&x.ano===prevAno);
+  }
+  const periodsToLoad=(()=>{
+    const set={};rangePeriods.forEach(p=>{set[p.id]=p;});
+    if(viewMode==="pagamento") rangePeriods.forEach(p=>{const pp=findPrevPeriod(p);if(pp)set[pp.id]=pp;});
+    return Object.values(set);
+  })();
 
-  // Load aggregated data when range > 1
+  // Load aggregated/payment data
   useEffect(()=>{
-    if(!isAgg){setViewData({});return;}
+    if(!isAgg&&viewMode==="operacional"){setViewData({});return;}
     let cancelled=false;
     (async()=>{
       setViewLoading(true);
-      const toLoad=rangePeriods.filter(p=>!viewData[p.id]);
+      const toLoad=periodsToLoad.filter(p=>!viewData[p.id]);
       if(toLoad.length===0){setViewLoading(false);return;}
       const nd={...viewData};
       for(const p of toLoad){
@@ -488,7 +504,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     })();
     return ()=>{cancelled=true;};
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[isAgg,viewFrom,viewTo]);
+  },[isAgg,viewFrom,viewTo,viewMode]);
 
   // Handle dropdown changes — when same period, sync activePeriod
   function setRange(field,id){
@@ -500,16 +516,34 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     }
   }
 
-  // Aggregated results: if isAgg, sum by PDV across all periods in range; else use current results
+  // Aggregated results
+  // - operacional mode: sum all PDVs across rangePeriods (current behavior)
+  // - pagamento mode: for each month M in rangePeriods, take dia 20 from M + dia 3 from M-1
+  const missingPrev=[];
   const aggResults=(()=>{
-    if(!isAgg) return results;
     const acc={};
-    rangePeriods.forEach(p=>{(viewData[p.id]||[]).forEach(r=>{
+    function add(r){
+      if(!r||!r.id)return;
       if(!acc[r.id])acc[r.id]={id:r.id,name:r.name,contract_type:r.contract_type,total:0,energyBill:0,pctRevenue:0};
       acc[r.id].total+=(r.total||0);
       acc[r.id].energyBill+=(r.energyBill||0);
       acc[r.id].pctRevenue+=(r.pctRevenue||0);
-    });});
+    }
+    if(viewMode==="operacional"){
+      if(!isAgg) return results;
+      rangePeriods.forEach(p=>{(viewData[p.id]||[]).forEach(add);});
+    }else{
+      // pagamento mode: compose payment view for each month
+      rangePeriods.forEach(p=>{
+        // Day 20 PDVs from current period (single period: use results prop; multi: use viewData)
+        const curData=(isAgg||viewMode==="pagamento")?(viewData[p.id]||[]):results;
+        curData.forEach(r=>{if(pdvPayDay[r.id]===20)add(r);});
+        // Day 3 PDVs from previous period
+        const prev=findPrevPeriod(p);
+        if(!prev){missingPrev.push(p.nome);return;}
+        (viewData[prev.id]||[]).forEach(r=>{if(pdvPayDay[r.id]===3)add(r);});
+      });
+    }
     return Object.values(acc);
   })();
 
@@ -589,10 +623,25 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
           {sortedPeriodsDesc.map(p=><option key={p.id} value={p.id}>{p.nome} {p.status==="fechado"?"🔒":""}</option>)}
         </select>
       </div>
-      {isAgg&&<div style={{fontSize:12,color:"var(--color-text-secondary)",fontStyle:"italic",paddingBottom:8}}>
-        📊 {rangePeriods.length} meses somados {viewLoading&&"(carregando...)"}
+      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+        <label style={{fontSize:11,color:"var(--color-text-secondary)",fontWeight:600}}>Visualizar por</label>
+        <div style={{display:"inline-flex",borderRadius:8,overflow:"hidden",border:"1px solid var(--color-border-tertiary)"}}>
+          <div onClick={()=>setViewMode("operacional")} style={{padding:"7px 12px",fontSize:12,cursor:"pointer",fontWeight:600,
+            background:viewMode==="operacional"?"var(--accent)":"#fff",color:viewMode==="operacional"?"#fff":"var(--color-text-secondary)"}}>Mês operacional</div>
+          <div onClick={()=>setViewMode("pagamento")} style={{padding:"7px 12px",fontSize:12,cursor:"pointer",fontWeight:600,borderLeft:"1px solid var(--color-border-tertiary)",
+            background:viewMode==="pagamento"?"var(--accent)":"#fff",color:viewMode==="pagamento"?"#fff":"var(--color-text-secondary)"}}>Mês de pagamento</div>
+        </div>
+      </div>
+      {(isAgg||viewMode==="pagamento")&&viewLoading&&<div style={{fontSize:12,color:"var(--color-text-secondary)",fontStyle:"italic",paddingBottom:8}}>
+        carregando...
+      </div>}
+      {isAgg&&!viewLoading&&<div style={{fontSize:12,color:"var(--color-text-secondary)",fontStyle:"italic",paddingBottom:8}}>
+        📊 {rangePeriods.length} meses {viewMode==="pagamento"?"(pagamentos)":"(somados)"}
       </div>}
     </div>
+    {viewMode==="pagamento"&&missingPrev.length>0&&!viewLoading&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",fontSize:11,marginBottom:14}}>
+      ⚠ Para mostrar dia 3 pago em {missingPrev.join(", ")}, falta os dados do mês anterior. Crie o período anterior em Histórico.
+    </div>}
     <div className="grid4" style={{marginBottom:16}}>
       <Stat val={fmt(tot)} label="Total repasse" color="#00314f"/>
       <Stat val={active} label="PDVs ativos" color="#9bf400"/>
