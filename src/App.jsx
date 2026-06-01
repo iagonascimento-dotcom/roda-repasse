@@ -797,16 +797,20 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     {viewMode==="pagamento"&&missingPrev.length>0&&!viewLoading&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",fontSize:11,marginBottom:14}}>
       ⚠ Para mostrar dia 3 pago em {missingPrev.join(", ")}, falta os dados do mês anterior. Crie o período anterior em Histórico.
     </div>}
-    <div className="grid4" style={{marginBottom:16}}>
-      <Stat val={fmt(tot)} label="Total repasse" color="#00314f"
-        sub={(filterType||filterRevCons)&&grandTot>0?`${pctOfGrand.toFixed(1)}% do total`:null}/>
-      <Stat val={active} label="PDVs ativos" color="#9bf400"
-        sub={`${pctActive.toFixed(1)}% de ${totalActiveAll}`}/>
-      <Stat val={fmt(totE)} label="Total energia" color="#ff8b00"
-        sub={tot>0?`${pctEnergy.toFixed(1)}% do repasse`:null}/>
-      <Stat val={fmt(totP)} label="Total % fat." color="#00314f"
-        sub={tot>0?`${pctRev.toFixed(1)}% do repasse`:null}/>
-    </div>
+    {(()=>{
+      const hasFilter=filterType||filterRevCons||searchTerms.length>0;
+      const filterSuffix=hasFilter?" (filtrado)":"";
+      return <div className="grid4" style={{marginBottom:16}}>
+        <Stat val={fmt(tot)} label={"Repasse"+filterSuffix} color="#00314f"
+          sub={hasFilter&&grandTot>0?`${pctOfGrand.toFixed(1)}% do total geral (${fmt(grandTot)})`:hasFilter?null:`Total de todos os PDVs`}/>
+        <Stat val={active} label={hasFilter?"PDVs filtrados":"PDVs ativos"} color="#9bf400"
+          sub={`${pctActive.toFixed(1)}% de ${totalActiveAll} PDVs ativos`}/>
+        <Stat val={fmt(totE)} label={"Energia"+filterSuffix} color="#ff8b00"
+          sub={tot>0?`${pctEnergy.toFixed(1)}%${hasFilter?" do filtrado":" do repasse"}`:null}/>
+        <Stat val={fmt(totP)} label={"% Faturamento"+filterSuffix} color="#00314f"
+          sub={tot>0?`${pctRev.toFixed(1)}%${hasFilter?" do filtrado":" do repasse"}`:null}/>
+      </div>;
+    })()}
     <div className="card" style={{position:"relative"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:cardsCollapsed.search?0:8,flexWrap:"wrap",gap:8}}>
         <div className="h3" style={{margin:0,display:"flex",alignItems:"center",gap:4}}><Chevron k="search"/>Buscar PDV {searchPdvs.length>0&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>({searchPdvs.length} selecionado(s))</span>}</div>
