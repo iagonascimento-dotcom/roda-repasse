@@ -570,26 +570,69 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     if(fromKey>toKey){[fromKey,toKey]=[toKey,fromKey];}
     const inRange=sortedPeriods.filter(p=>{const k=p.ano*12+p.mes;return k>=fromKey&&k<=toKey;});
     if(inRange.length===0){setCompError("Nenhum período no intervalo.");return;}
+    // In pagamento mode, also load previous period for each (for dia 3 data)
+    const toLoadSet={};inRange.forEach(p=>{toLoadSet[p.id]=p;});
+    if(viewMode==="pagamento") inRange.forEach(p=>{const pp=findPrevPeriod(p);if(pp)toLoadSet[pp.id]=pp;});
     setLoadingComp(true);
-    const newData={};let empties=[];
+    const newData={};let empties=[];const missing=[];
     try{
-      for(const p of inRange){
+      for(const p of Object.values(toLoadSet)){
         const res=await onLoadPeriodResults(p.id);
         newData[p.id]=res||[];
         if(!res||res.length===0) empties.push(p.nome);
       }
+      if(viewMode==="pagamento") inRange.forEach(p=>{if(!findPrevPeriod(p))missing.push(p.nome);});
       setCompPeriods(inRange);setCompData(newData);
-      if(empties.length>0) setCompError(`Sem resultados calculados em: ${empties.join(", ")}. Rode o cálculo nesses períodos.`);
+      const msgs=[];
+      if(empties.length>0) msgs.push(`Sem resultados calculados em: ${empties.join(", ")}.`);
+      if(missing.length>0) msgs.push(`Falta período anterior a: ${missing.join(", ")}.`);
+      if(msgs.length>0) setCompError(msgs.join(" "));
     }catch(e){setCompError("Erro ao carregar: "+e.message);console.error(e);}
     setLoadingComp(false);
   }
   function clearRange(){setCompPeriods([]);setCompData({});setRangeFrom("");setRangeTo("");setCompError("");}
 
+  // Reload comparison data when viewMode changes (if range was already selected)
+  useEffect(()=>{
+    if(compPeriods.length>0&&viewMode==="pagamento"){
+      // Need to ensure prev periods are loaded
+      const missing=compPeriods.map(findPrevPeriod).filter(p=>p&&!compData[p.id]);
+      if(missing.length===0)return;
+      (async()=>{
+        const nd={...compData};
+        for(const p of missing){
+          try{const res=await onLoadPeriodResults(p.id);nd[p.id]=res||[];}catch(e){console.error(e);nd[p.id]=[];}
+        }
+        setCompData(nd);
+      })();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[viewMode]);
+
   const selPeriods=compPeriods;
   const allPdvNames=pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>({id:p.id,name:p.name}));
+  // For each period column, compose value based on viewMode:
+  // - operacional: total of this PDV in that period
+  // - pagamento: total of this PDV in that period (only if payment_day=20) + total from previous period (only if payment_day=3)
   const compRows=allPdvNames.map(({id,name})=>{
     const row={id,name};
-    selPeriods.forEach(p=>{const pRes=compData[p.id]||[];const r=pRes.find(x=>x.id===id);row[p.id]=r?.total||0;});
+    selPeriods.forEach(p=>{
+      if(viewMode==="operacional"){
+        const r=(compData[p.id]||[]).find(x=>x.id===id);
+        row[p.id]=r?.total||0;
+      }else{
+        const payDay=pdvPayDay[id];
+        let total=0;
+        if(payDay===20){
+          const r=(compData[p.id]||[]).find(x=>x.id===id);
+          total=r?.total||0;
+        }else if(payDay===3){
+          const prev=findPrevPeriod(p);
+          if(prev){const r=(compData[prev.id]||[]).find(x=>x.id===id);total=r?.total||0;}
+        }
+        row[p.id]=total;
+      }
+    });
     return row;
   }).filter(row=>selPeriods.some(p=>row[p.id]>0));
 
@@ -685,7 +728,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
 
     {allPeriods&&allPeriods.length>0&&<div className="card">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-        <div className="h3">Comparar períodos</div>
+        <div className="h3" style={{margin:0}}>Comparar períodos {viewMode==="pagamento"&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>(por mês de pagamento)</span>}</div>
         {canExport&&selPeriods.length>0&&compRows.length>0&&<button className="btn btn-s" onClick={exportCompCSV} style={{fontSize:11}}>⬇ Exportar CSV</button>}
       </div>
       <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>Selecione um intervalo de períodos para comparar valores por PDV:</p>
