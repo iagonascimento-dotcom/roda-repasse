@@ -99,6 +99,30 @@ const SB = {
     await this.api(`/rest/v1/pdvs?id=eq.${uuid}`,{method:"PATCH",body:JSON.stringify(body),
       headers:{"Prefer":"return=minimal"}});
   },
+  async createPdv(pdv){
+    const body={
+      vmpay_id:String(pdv.id||"").trim()||null,
+      nome:pdv.name||"",
+      contract_type:pdv.contract_type||"Fixo",
+      revenue_consideration:pdv.revenue_consideration||"Líquido",
+      negotiated_percentage:Number(pdv.negotiated_percentage)||0,
+      kwh_unity_price:Number(pdv.kwh_unity_price)||0,
+      minimal_repass:Number(pdv.minimal_repass)||0,
+      energy_bill:0,
+      payment_day:Number(pdv.payment_day)||20,
+      bank_cnpj_cond:pdv.bank_cnpj_cond||"",
+      bank_cnpj:pdv.bank_cnpj||"",
+      bank_name:pdv.bank_name||"",
+      bank_banco:pdv.bank_banco||"",
+      bank_agencia:pdv.bank_agencia||"",
+      bank_conta:pdv.bank_conta||"",
+      bank_pix:pdv.bank_pix||"",
+      active:true
+    };
+    const res=await this.api("/rest/v1/pdvs",{method:"POST",body:JSON.stringify(body),
+      headers:{"Prefer":"return=representation"}});
+    return Array.isArray(res)?res[0]:res;
+  },
   /* Periods */
   async loadPeriods(){
     return this.api("/rest/v1/periodos?select=*&order=ano.desc,mes.desc");
@@ -987,6 +1011,8 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
   const [search,setSearch]=useState("");
   const [editing,setEditing]=useState(null);
   const [showForm,setShowForm]=useState(false);
+  // Snapshot of prefilled data when form opens (avoids losing it on re-renders)
+  const [formInitData,setFormInitData]=useState(null);
 
   const empty={id:"",name:"",contract_type:"Fixo",revenue_consideration:"Líquido",
     negotiated_percentage:0,kwh_unity_price:0,minimal_repass:0,manual_adjustment:0,
@@ -996,7 +1022,10 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
   // Auto-open form when navigated from Conferência with prefilled data
   useEffect(()=>{
     if(prefilled&&prefilled.id){
-      setEditing(null);setShowForm(true);
+      console.log("[PdvManager] prefilled received:",prefilled);
+      setEditing(null);
+      setFormInitData({...empty,id:String(prefilled.id),name:prefilled.name||""});
+      setShowForm(true);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[prefilled]);
@@ -1008,7 +1037,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
   );
 
   function closeForm(){
-    setShowForm(false);setEditing(null);
+    setShowForm(false);setEditing(null);setFormInitData(null);
     if(onPrefilledHandled) onPrefilledHandled();
   }
   function savePdv(f){
@@ -1017,13 +1046,16 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
   }
   function del(idx){const u=pdvs.filter((_,i)=>i!==idx);setPdvs(u);save(u);}
 
+  // Decide which pdv data to pass to the form
+  const formPdv=editing!==null?pdvs[editing]:(formInitData||empty);
+
   return <div className="fade-in">
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div className="h2">Cadastro de PDVs ({pdvs.length})</div>
-      <button className="btn btn-p" onClick={()=>{setEditing(null);setShowForm(true);}}>+ Novo PDV</button>
+      <button className="btn btn-p" onClick={()=>{setEditing(null);setFormInitData(null);setShowForm(true);}}>+ Novo PDV</button>
     </div>
     <input placeholder="Buscar por nome, ID ou tipo..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:14}}/>
-    {showForm&&<PdvForm pdv={editing!==null?pdvs[editing]:(prefilled&&prefilled.id?{...empty,id:prefilled.id,name:prefilled.name||""}:empty)} onSave={savePdv} onCancel={closeForm}/>}
+    {showForm&&<PdvForm key={formPdv.id||"new"} pdv={formPdv} onSave={savePdv} onCancel={closeForm}/>}
     <div className="scroll-x">
       <table><thead><tr>
         <th>ID</th><th>Nome</th><th>Contrato</th><th>Receita</th><th>%</th><th>kWh</th><th>Mínimo</th><th></th>
@@ -2470,27 +2502,43 @@ export default function App() {
       negotiated_percentage:"% negociado",kwh_unity_price:"Preço kWh",minimal_repass:"Repasse mínimo",
       payment_day:"Dia pagamento",bank_cnpj_cond:"CNPJ cond",bank_cnpj:"CNPJ",bank_name:"Nome conta",
       bank_banco:"Banco",bank_agencia:"Agência",bank_conta:"Conta",bank_pix:"PIX"};
+    let needsReload=false;
     for(const np of newPdvs){
+      if(!np.uuid){
+        // NEW PDV - INSERT into database
+        try{
+          const created=await SB.createPdv(np);
+          audit("Criou PDV",{entidade:"PDV",entidade_nome:np.name,
+            descricao:`VMpay ID: ${np.id||"(sem ID)"}, Tipo: ${np.contract_type}`});
+          needsReload=true;
+        }catch(e){
+          console.error("Create PDV error:",e);
+          alert("Erro ao criar PDV: "+(e.message||"verifique o console"));
+        }
+        continue;
+      }
       const op=pdvs.find(p=>p.id===np.id);
       if(!op||JSON.stringify(np)!==JSON.stringify(op)){
-        if(np.uuid){
-          // Collect field-level changes for audit
-          if(op) Object.keys(fieldLabels).forEach(k=>{
-            if(String(np[k]??"")!==String(op[k]??"")){
-              auditItems.push({entidade:"PDV",entidade_nome:np.name,campo:fieldLabels[k],
-                valor_antigo:op[k],valor_novo:np[k]});
-            }
-          });
-          try{await SB.patchPdv(np.uuid,{nome:np.name,contract_type:np.contract_type,
-            revenue_consideration:np.revenue_consideration,negotiated_percentage:np.negotiated_percentage,
-            kwh_unity_price:np.kwh_unity_price,minimal_repass:np.minimal_repass,
-            payment_day:np.payment_day,bank_cnpj_cond:np.bank_cnpj_cond,bank_cnpj:np.bank_cnpj,
-            bank_name:np.bank_name,bank_banco:np.bank_banco,bank_agencia:np.bank_agencia,
-            bank_conta:np.bank_conta,bank_pix:np.bank_pix});}catch(e){console.error("Save PDV error:",e);}
-        }
+        // Collect field-level changes for audit
+        if(op) Object.keys(fieldLabels).forEach(k=>{
+          if(String(np[k]??"")!==String(op[k]??"")){
+            auditItems.push({entidade:"PDV",entidade_nome:np.name,campo:fieldLabels[k],
+              valor_antigo:op[k],valor_novo:np[k]});
+          }
+        });
+        try{await SB.patchPdv(np.uuid,{nome:np.name,contract_type:np.contract_type,
+          revenue_consideration:np.revenue_consideration,negotiated_percentage:np.negotiated_percentage,
+          kwh_unity_price:np.kwh_unity_price,minimal_repass:np.minimal_repass,
+          payment_day:np.payment_day,bank_cnpj_cond:np.bank_cnpj_cond,bank_cnpj:np.bank_cnpj,
+          bank_name:np.bank_name,bank_banco:np.bank_banco,bank_agencia:np.bank_agencia,
+          bank_conta:np.bank_conta,bank_pix:np.bank_pix});}catch(e){console.error("Save PDV error:",e);}
       }
     }
     if(auditItems.length>0) auditBatch("Editou cadastro PDV",auditItems);
+    // Reload from DB to get the uuids of newly created PDVs
+    if(needsReload){
+      try{const fresh=await SB.loadPdvs();setPdvs(fresh);}catch(e){console.error("Reload error:",e);}
+    }
   }
 
   async function saveMdToSB(newMd){
