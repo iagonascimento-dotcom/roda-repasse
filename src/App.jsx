@@ -1236,6 +1236,30 @@ function DataEntry({pdvs,md,setMd,period,save}) {
     setSaving(false);
   }
 
+  // Download a spreadsheet with all PDVs that need meter reading (for field collection)
+  function downloadMedidorList(){
+    const medidorPdvs=pdvs.filter(p=>needsMeter(p.contract_type));
+    if(medidorPdvs.length===0){alert("Nenhum PDV com contrato de medidor encontrado.");return;}
+    // Sort by name for easier field reading
+    const sorted=[...medidorPdvs].sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+    const rows=[
+      ["Código","Nome do PDV","Tipo de contrato","Último medidor","Novo medidor","Observações"]
+    ];
+    sorted.forEach(p=>{
+      const ref=(localMd[p.id]?.meter_end||localMd[p.id]?.meter_start||0);
+      rows.push([p.id||"",p.name||"",p.contract_type||"",ref||"","",""]);
+    });
+    const ws=XLSX.utils.aoa_to_sheet(rows);
+    // Column widths
+    ws['!cols']=[{wch:12},{wch:42},{wch:38},{wch:18},{wch:18},{wch:30}];
+    // Freeze header row
+    ws['!freeze']={xSplit:0,ySplit:1};
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,"Coleta de medidores");
+    const today=new Date();const dateStr=`${String(today.getDate()).padStart(2,"0")}-${String(today.getMonth()+1).padStart(2,"0")}-${today.getFullYear()}`;
+    XLSX.writeFile(wb,`coleta_medidores_${dateStr}.xlsx`);
+  }
+
   function parseBR(s){
     if(!s)return 0;
     const clean=s.toString().trim().replace(/[R$\s]/g,"");
@@ -1330,6 +1354,17 @@ function DataEntry({pdvs,md,setMd,period,save}) {
     </div>
 
     {tab==="meters"&&<div>
+      <div className="card" style={{background:"#fff8e8",border:"1px solid #ffd28a",marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+          <div>
+            <div className="h3" style={{margin:0}}>📋 Rota de coleta de medidores</div>
+            <p style={{fontSize:12,color:"var(--color-text-secondary)",margin:"4px 0 0"}}>
+              Baixa uma planilha com todos os <strong>{mPdvs.length}</strong> PDVs de medidor (código, nome, último valor conhecido) pra você levar a campo e anotar.
+            </p>
+          </div>
+          <button className="btn btn-p" onClick={downloadMedidorList}>⬇ Baixar lista pra coleta</button>
+        </div>
+      </div>
       <div className="card" style={{background:"var(--accent-bg)",border:"none"}}>
         <div className="h3">Importar medidores</div>
         <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:6}}>Cole direto da planilha de medidores.</p>
