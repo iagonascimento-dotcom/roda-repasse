@@ -1011,12 +1011,15 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
 }
 
 /* ─── PDV Manager ─── */
-function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
+function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onRequestChange}) {
   const [search,setSearch]=useState("");
   const [editing,setEditing]=useState(null);
   const [showForm,setShowForm]=useState(false);
   // Snapshot of prefilled data when form opens (avoids losing it on re-renders)
   const [formInitData,setFormInitData]=useState(null);
+  const [justify,setJustify]=useState(null);
+
+  const isUsuario=userRole?.role==="usuario";
 
   const empty={id:"",name:"",contract_type:"Fixo",revenue_consideration:"Líquido",
     negotiated_percentage:0,kwh_unity_price:0,minimal_repass:0,manual_adjustment:0,
@@ -1045,29 +1048,91 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
     if(onPrefilledHandled) onPrefilledHandled();
   }
   function savePdv(f){
+    if(isUsuario&&onRequestChange){
+      // USUARIO flow: create a change_request instead of saving
+      const isCreating=editing===null;
+      const orig=editing!==null?pdvs[editing]:null;
+      const reqs=[];const changesSummary=[];
+      const fieldLabelMap={name:"Nome",contract_type:"Tipo contrato",revenue_consideration:"Receita",
+        negotiated_percentage:"% Negociado",kwh_unity_price:"kWh preço",minimal_repass:"Mínimo",
+        payment_day:"Dia pgto",bank_cnpj_cond:"CNPJ Cond",bank_cnpj:"CNPJ Conta",bank_name:"Nome Conta",
+        bank_banco:"Banco",bank_agencia:"Agência",bank_conta:"Conta",bank_pix:"PIX"};
+      if(isCreating){
+        // Single request with full payload
+        reqs.push({tipo:"pdv_create",pdv_vmpay_id:String(f.id||""),pdv_nome:f.name||"",
+          campo:"(novo PDV)",valor_atual:"",valor_novo:f.name||"",payload:f,
+          requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",
+          requester_id:userRole?.user_id||null});
+        changesSummary.push(`Novo PDV: ${f.name} (ID ${f.id||"sem ID"}) - ${f.contract_type}`);
+      }else{
+        // Generate one request per changed field
+        Object.keys(fieldLabelMap).forEach(k=>{
+          if(String(f[k]??"")!==String(orig[k]??"")){
+            reqs.push({tipo:"pdv_edit",pdv_vmpay_id:String(orig.id||""),pdv_nome:orig.name||"",
+              campo:k,valor_atual:String(orig[k]??""),valor_novo:String(f[k]??""),
+              requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",
+              requester_id:userRole?.user_id||null});
+            changesSummary.push(`${fieldLabelMap[k]}: ${orig[k]||"(vazio)"} → ${f[k]||"(vazio)"}`);
+          }
+        });
+      }
+      if(reqs.length===0){closeForm();return;}
+      setJustify({changeCount:reqs.length,detail:changesSummary.join("\n"),
+        onConfirm:async(reason)=>{
+          try{for(const r of reqs) await onRequestChange({...r,justificativa:reason});
+            alert(isCreating?"Solicitação de cadastro enviada! Aguarde aprovação do administrador.":"Solicitações de alteração enviadas!");
+          }catch(e){alert("Erro: "+e.message);}
+          setJustify(null);closeForm();
+        }});
+      return;
+    }
+    // Admin/Master flow: save directly
     const u=editing!==null?pdvs.map((p,i)=>i===editing?{...pdvs[editing],...f}:p):[...pdvs,f];
     setPdvs(u);save(u);closeForm();
   }
   async function del(idx){
     const p=pdvs[idx];
+    if(isUsuario&&onRequestChange){
+      // USUARIO flow: ask for justification and create a change_request
+      setJustify({changeCount:1,detail:`Excluir PDV: ${p.name} (ID ${p.id||"sem ID"})`,
+        onConfirm:async(reason)=>{
+          try{
+            await onRequestChange({tipo:"pdv_delete",pdv_vmpay_id:String(p.id||""),pdv_nome:p.name||"",
+              campo:"(exclusão)",valor_atual:p.name||"",valor_novo:"(excluir)",
+              payload:{uuid:p.uuid,name:p.name,id:p.id,contract_type:p.contract_type},
+              justificativa:reason,
+              requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",
+              requester_id:userRole?.user_id||null});
+            alert("Solicitação de exclusão enviada! Aguarde aprovação do administrador.");
+          }catch(e){alert("Erro: "+e.message);}
+          setJustify(null);
+        }});
+      return;
+    }
+    // Admin/Master flow: confirm and delete directly
     if(!confirm(`Excluir "${p.name}"?\n\nIsso também removerá:\n- Todos os dados mensais deste PDV\n- Todos os cálculos de repasse históricos\n\nEsta ação NÃO pode ser desfeita.`))return;
-    console.log("[PdvManager.del] Deletando:",p.name,"uuid:",p.uuid);
     const u=pdvs.filter((_,i)=>i!==idx);
     setPdvs(u);
-    try{await save(u);console.log("[PdvManager.del] Save concluído");}
-    catch(e){console.error("[PdvManager.del] Save error:",e);alert("Erro ao salvar: "+e.message);}
+    try{await save(u);}
+    catch(e){console.error("Delete error:",e);alert("Erro ao salvar: "+e.message);}
   }
 
   // Decide which pdv data to pass to the form
   const formPdv=editing!==null?pdvs[editing]:(formInitData||empty);
 
   return <div className="fade-in">
+    {justify&&<JustifyModal changeCount={justify.changeCount} detail={justify.detail} onConfirm={justify.onConfirm} onCancel={()=>setJustify(null)}/>}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div className="h2">Cadastro de PDVs ({pdvs.length})</div>
-      <button className="btn btn-p" onClick={()=>{setEditing(null);setFormInitData(null);setShowForm(true);}}>+ Novo PDV</button>
+      <button className="btn btn-p" onClick={()=>{setEditing(null);setFormInitData(null);setShowForm(true);}}>
+        {isUsuario?"+ Solicitar novo PDV":"+ Novo PDV"}
+      </button>
     </div>
+    {isUsuario&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",fontSize:12,marginBottom:14}}>
+      💡 Como Usuário, suas ações (criar, editar, excluir) serão enviadas como solicitação para o administrador aprovar.
+    </div>}
     <input placeholder="Buscar por nome, ID ou tipo..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:14}}/>
-    {showForm&&<PdvForm key={formPdv.id||"new"} pdv={formPdv} onSave={savePdv} onCancel={closeForm}/>}
+    {showForm&&<PdvForm key={formPdv.id||"new"} pdv={formPdv} onSave={savePdv} onCancel={closeForm} isUsuario={isUsuario}/>}
     <div className="scroll-x">
       <table><thead><tr>
         <th>ID</th><th>Nome</th><th>Contrato</th><th>Receita</th><th>%</th><th>kWh</th><th>Mínimo</th><th></th>
@@ -1091,11 +1156,11 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
   </div>;
 }
 
-function PdvForm({pdv,onSave,onCancel}) {
+function PdvForm({pdv,onSave,onCancel,isUsuario}) {
   const [f,sf]=useState({...pdv});
   const s=(k,v)=>sf(o=>({...o,[k]:v}));
   return <div className="card fade-in" style={{border:"2px solid var(--accent)",marginBottom:16}}>
-    <div className="h3">{pdv.id?"Editar":"Novo"} PDV</div>
+    <div className="h3">{pdv.id?"Editar":"Novo"} PDV {isUsuario&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>(sujeito a aprovação)</span>}</div>
     <div className="grid3">
       <Field label="ID"><input value={f.id} onChange={e=>s("id",e.target.value)}/></Field>
       <Field label="Nome"><input value={f.name} onChange={e=>s("name",e.target.value)}/></Field>
@@ -1103,10 +1168,10 @@ function PdvForm({pdv,onSave,onCancel}) {
         {CONTRACT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
       <Field label="Receita"><select value={f.revenue_consideration} onChange={e=>s("revenue_consideration",e.target.value)}>
         {REV_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
-      <Field label="% Negociado"><input type="number" step="0.001" value={f.negotiated_percentage} onChange={e=>s("negotiated_percentage",parseFloat(e.target.value)||0)}/></Field>
-      <Field label="kWh preço"><input type="number" step="0.01" value={f.kwh_unity_price} onChange={e=>s("kwh_unity_price",parseFloat(e.target.value)||0)}/></Field>
-      <Field label="Mínimo"><input type="number" step="0.01" value={f.minimal_repass} onChange={e=>s("minimal_repass",parseFloat(e.target.value)||0)}/></Field>
-      <Field label="Dia pgto"><input type="number" value={f.payment_day} onChange={e=>s("payment_day",parseInt(e.target.value)||20)}/></Field>
+      <Field label="% Negociado"><input type="number" step="0.001" value={f.negotiated_percentage} onFocus={e=>e.target.select()} onChange={e=>s("negotiated_percentage",parseFloat(e.target.value)||0)}/></Field>
+      <Field label="kWh preço"><input type="number" step="0.01" value={f.kwh_unity_price} onFocus={e=>e.target.select()} onChange={e=>s("kwh_unity_price",parseFloat(e.target.value)||0)}/></Field>
+      <Field label="Mínimo"><input type="number" step="0.01" value={f.minimal_repass} onFocus={e=>e.target.select()} onChange={e=>s("minimal_repass",parseFloat(e.target.value)||0)}/></Field>
+      <Field label="Dia pgto"><input type="number" value={f.payment_day} onFocus={e=>e.target.select()} onChange={e=>s("payment_day",parseInt(e.target.value)||20)}/></Field>
     </div>
     <details style={{marginTop:12}}>
       <summary style={{cursor:"pointer",fontSize:12,fontWeight:600,color:"var(--color-text-secondary)"}}>Dados bancários</summary>
@@ -1121,7 +1186,7 @@ function PdvForm({pdv,onSave,onCancel}) {
       </div>
     </details>
     <div style={{marginTop:12,display:"flex",gap:8}}>
-      <button className="btn btn-p" onClick={()=>onSave(f)}>Salvar</button>
+      <button className="btn btn-p" onClick={()=>onSave(f)}>{isUsuario?"📩 Enviar solicitação":"Salvar"}</button>
       <button className="btn btn-s" onClick={onCancel}>Cancelar</button>
     </div>
   </div>;
@@ -2040,7 +2105,6 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
     try{
       // If approved, apply the actual change to the database
       if(status==="aprovado"){
-        // Parse the new value back to the proper type
         const numericFields=new Set(["negotiated_percentage","kwh_unity_price","minimal_repass","payment_day",
           "meter_start","meter_end","raw_revenue","manual_adjustment","energy_bill_cond"]);
         const intFields=new Set(["payment_day"]);
@@ -2049,11 +2113,22 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
           parsedVal=intFields.has(req.campo)?(parseInt(req.valor_novo)||0):(parseFloat(req.valor_novo)||0);
         }
 
-        if(req.tipo==="pdv_edit"){
-          // Find the PDV uuid by vmpay_id
+        if(req.tipo==="pdv_create"){
+          // Create a new PDV from the payload
+          if(!req.payload) throw new Error("Solicitação sem dados do novo PDV");
+          await SB.createPdv(req.payload);
+        }else if(req.tipo==="pdv_delete"){
+          // Delete the PDV by uuid (stored in payload) or by looking up vmpay_id
+          let uuid=req.payload?.uuid;
+          if(!uuid){
+            const targetPdv=allPdvs.find(p=>String(p.id)===String(req.pdv_vmpay_id));
+            if(!targetPdv||!targetPdv.uuid) throw new Error("PDV não encontrado para excluir");
+            uuid=targetPdv.uuid;
+          }
+          await SB.deletePdv(uuid);
+        }else if(req.tipo==="pdv_edit"){
           const targetPdv=allPdvs.find(p=>String(p.id)===String(req.pdv_vmpay_id));
           if(!targetPdv||!targetPdv.uuid) throw new Error("PDV não encontrado para aplicar alteração");
-          // Map field name (name → nome)
           const fieldKey=req.campo==="name"?"nome":req.campo;
           await SB.patchPdv(targetPdv.uuid,{[fieldKey]:parsedVal});
         }else if(req.tipo==="md_edit"){
@@ -2065,8 +2140,9 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
       }
       // Mark the request as reviewed
       await SB.reviewChangeRequest(req.id,status,userRole.user_id);
+      const acaoLabel={pdv_create:"Cadastro de PDV",pdv_delete:"Exclusão de PDV",pdv_edit:"PDV",md_edit:"Dados mensais"};
       audit(status==="aprovado"?"Aprovou solicitação":"Rejeitou solicitação",
-        {entidade:req.tipo==="pdv_edit"?"PDV":"Dados mensais",entidade_nome:req.pdv_nome,
+        {entidade:acaoLabel[req.tipo]||req.tipo,entidade_nome:req.pdv_nome,
          campo:req.campo,valor_antigo:req.valor_atual,valor_novo:req.valor_novo,
          periodo_nome:req.periodo_nome||"",
          descricao:`Solicitado por ${req.requester_nome||req.requester_email}${req.justificativa?` — Justificativa: "${req.justificativa}"`:""}`});
@@ -2147,8 +2223,13 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
     {tab==="requests"&&<>
       {requests.length===0?<div className="card empty">Nenhuma solicitação de alteração</div>:
       <div className="card" style={{padding:0,overflow:"hidden"}}><div className="scroll-x"><table>
-        <thead><tr><th>Solicitante</th><th>PDV</th><th>Campo</th><th>De</th><th>Para</th><th>Justificativa</th><th>Status</th><th></th></tr></thead>
-        <tbody>{requests.map(r=><tr key={r.id} style={r.status==="pendente"?{background:"var(--orange-bg)"}:{}}>
+        <thead><tr><th>Tipo</th><th>Solicitante</th><th>PDV</th><th>Campo</th><th>De</th><th>Para</th><th>Justificativa</th><th>Status</th><th></th></tr></thead>
+        <tbody>{requests.map(r=>{
+          const tipoBadges={pdv_create:{l:"➕ Criar PDV",c:"#3d7a00"},pdv_delete:{l:"🗑 Excluir PDV",c:"#c62828"},
+            pdv_edit:{l:"✎ Editar PDV",c:"#00314f"},md_edit:{l:"✎ Dados mensais",c:"#00314f"}};
+          const tb=tipoBadges[r.tipo]||{l:r.tipo,c:"#666"};
+          return <tr key={r.id} style={r.status==="pendente"?{background:"var(--orange-bg)"}:{}}>
+          <td><span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:tb.c,color:"#fff",fontWeight:600,whiteSpace:"nowrap"}}>{tb.l}</span></td>
           <td style={{fontSize:11}}>{r.requester_nome||r.requester_email}</td>
           <td className="trunc" style={{fontSize:11}}>{r.pdv_nome||r.pdv_vmpay_id}</td>
           <td className="mono" style={{fontSize:11}}>{r.campo}</td>
@@ -2162,7 +2243,8 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
             <button className="btn btn-o" style={{fontSize:10,padding:"2px 8px",marginRight:4}} onClick={()=>reviewReq(r,"aprovado")}>Aprovar</button>
             <button className="btn btn-d" style={{fontSize:10,padding:"2px 8px"}} onClick={()=>reviewReq(r,"rejeitado")}>Rejeitar</button>
           </>}</td>
-        </tr>)}</tbody></table></div></div>}
+        </tr>;
+        })}</tbody></table></div></div>}
     </>}
 
     {tab==="perms"&&<div className="card">
@@ -2172,7 +2254,8 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
         <tbody>
           {[["Dashboard — visualizar","✓","✓","✓","✓"],["Administração — gerenciar usuários","✓","✗","✗","✗"],
             ["Aprovar/rejeitar solicitações","✓","✗","✗","✗"],["Histórico — ver períodos","✓","✓","✓","✓"],
-            ["Histórico — criar/entregar/fechar","✓","✓","✗","✗"],["Cadastro de PDVs","✓","✓","✗","✗"],
+            ["Histórico — criar/entregar/fechar","✓","✓","✗","✗"],["Cadastro PDVs — editar direto","✓","✓","✗","✗"],
+            ["Cadastro PDVs — solicitar criar/editar/excluir","—","—","✓","✗"],
             ["Entrada de dados (importar)","✓","✓","✗","✗"],["Pendências — corrigir direto","✓","✓","✗","✗"],
             ["Pendências — solicitar alteração","—","—","✓","✗"],["Calcular repasse","✓","✓","✗","✗"],
             ["Demonstrativo — editar direto","✓","✓","✗","✗"],["Demonstrativo — solicitar alteração","—","—","✓","✗"],
@@ -2438,6 +2521,35 @@ const LOGO_SVG = "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBzdGFuZGFs
 
 /* ─── Main App ─── */
 export default function App() {
+  // Auto-reload if a new build is deployed (compares running vs deployed version.txt)
+  useEffect(()=>{
+    const BUILD_VERSION=typeof __BUILD_TIME__!=="undefined"?__BUILD_TIME__:null;
+    if(!BUILD_VERSION)return; // dev mode (no build)
+    async function check(){
+      try{
+        const r=await fetch("./version.txt?_="+Date.now(),{cache:"no-store"});
+        if(!r.ok)return;
+        const remote=(await r.text()).trim();
+        if(remote&&remote!==BUILD_VERSION){
+          console.log("[version] Nova versão detectada:",remote,"vs",BUILD_VERSION,"— recarregando...");
+          // Clear caches if available, then reload
+          try{
+            if("caches" in window){
+              const keys=await caches.keys();
+              await Promise.all(keys.map(k=>caches.delete(k)));
+            }
+          }catch{}
+          window.location.reload();
+        }
+      }catch{} // network errors silently ignored
+    }
+    check(); // on mount
+    const onFocus=()=>check();
+    window.addEventListener("focus",onFocus);
+    const interval=setInterval(check,60000); // every 60 s
+    return ()=>{window.removeEventListener("focus",onFocus);clearInterval(interval);};
+  },[]);
+
   const [authed,setAuthed]=useState(false);
   const [authLoading,setAuthLoading]=useState(true);
   const [page,setPage]=useState("dashboard");
@@ -2549,17 +2661,14 @@ export default function App() {
     // Detect deleted PDVs (in old pdvs but not in newPdvs)
     const newUuids=new Set(newPdvs.map(p=>p.uuid).filter(Boolean));
     const deletedPdvs=pdvs.filter(p=>p.uuid&&!newUuids.has(p.uuid));
-    console.log("[savePdvsToSB] old count:",pdvs.length,"new count:",newPdvs.length,"to delete:",deletedPdvs.length);
     for(const dp of deletedPdvs){
-      console.log("[savePdvsToSB] DELETING:",dp.name,"uuid:",dp.uuid);
       try{
         await SB.deletePdv(dp.uuid);
-        console.log("[savePdvsToSB] DELETED OK:",dp.name);
         audit("Excluiu PDV",{entidade:"PDV",entidade_nome:dp.name,
           descricao:`VMpay ID: ${dp.id||"(sem ID)"}, Tipo: ${dp.contract_type}`});
         needsReload=true;
       }catch(e){
-        console.error("[savePdvsToSB] Delete PDV error:",e);
+        console.error("Delete PDV error:",e);
         alert(`Erro ao excluir "${dp.name}": ${e.message||"verifique o console"}`);
         needsReload=true;
       }
@@ -2567,15 +2676,13 @@ export default function App() {
     for(const np of newPdvs){
       if(!np.uuid){
         // NEW PDV - INSERT into database
-        console.log("[savePdvsToSB] CREATING new PDV:",np.name,"vmpay:",np.id);
         try{
-          const created=await SB.createPdv(np);
-          console.log("[savePdvsToSB] CREATED OK:",created);
+          await SB.createPdv(np);
           audit("Criou PDV",{entidade:"PDV",entidade_nome:np.name,
             descricao:`VMpay ID: ${np.id||"(sem ID)"}, Tipo: ${np.contract_type}`});
           needsReload=true;
         }catch(e){
-          console.error("[savePdvsToSB] Create PDV error:",e);
+          console.error("Create PDV error:",e);
           alert("Erro ao criar PDV: "+(e.message||"verifique o console"));
         }
         continue;
@@ -2594,21 +2701,19 @@ export default function App() {
           kwh_unity_price:np.kwh_unity_price,minimal_repass:np.minimal_repass,
           payment_day:np.payment_day,bank_cnpj_cond:np.bank_cnpj_cond,bank_cnpj:np.bank_cnpj,
           bank_name:np.bank_name,bank_banco:np.bank_banco,bank_agencia:np.bank_agencia,
-          bank_conta:np.bank_conta,bank_pix:np.bank_pix});}catch(e){console.error("[savePdvsToSB] Patch PDV error:",e);}
+          bank_conta:np.bank_conta,bank_pix:np.bank_pix});}catch(e){console.error("Patch PDV error:",e);}
       }
     }
     if(auditItems.length>0) auditBatch("Editou cadastro PDV",auditItems);
     // Reload from DB to ensure UI matches DB (uuids for new, removed for deleted)
     if(needsReload){
       try{
-        console.log("[savePdvsToSB] Reloading PDVs from DB...");
         const fresh=await SB.loadPdvs();
         setPdvs(fresh);
         const um={},rm={};
         fresh.forEach(p=>{um[p.id]=p.uuid;rm[p.uuid]=p.id;});
         setUuidMap(um);setRevUuidMap(rm);
-        console.log("[savePdvsToSB] Reloaded, new count:",fresh.length);
-      }catch(e){console.error("[savePdvsToSB] Reload error:",e);}
+      }catch(e){console.error("Reload error:",e);}
     }
   }
 
@@ -2777,7 +2882,7 @@ export default function App() {
     ["admin","⚙","Administração",["master"]],
     ["---","","Passo a passo do repasse",["master","admin"]],
     ["historico","⏱","Histórico de Período",["master","admin","usuario","view"]],
-    ["pdvs","⊞","Cadastro PDVs",["master","admin"]],
+    ["pdvs","⊞","Cadastro PDVs",["master","admin","usuario"]],
     ["conferencia","📋","Conferência PDVs",["master","admin"]],
     ["entrada","⇥","Entrada dados",["master","admin"]],
     ["calcular","≡","Calcular",["master","admin"]],
@@ -2858,7 +2963,9 @@ export default function App() {
           </div>}
         </>}
         {page==="pdvs"&&<PdvManager pdvs={pdvs} setPdvs={setPdvs} save={savePdvsToSB}
-          prefilled={prefilledPdv} onPrefilledHandled={()=>setPrefilledPdv(null)}/>}
+          prefilled={prefilledPdv} onPrefilledHandled={()=>setPrefilledPdv(null)}
+          userRole={userRole}
+          onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
         {page==="conferencia"&&<Conferencia pdvs={pdvs} userRole={userRole}
           onCadastrar={(data)=>{setPrefilledPdv(data);setPage("pdvs");}}/>}
         {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB}/>}
