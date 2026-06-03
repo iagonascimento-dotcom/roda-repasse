@@ -123,6 +123,10 @@ const SB = {
       headers:{"Prefer":"return=representation"}});
     return Array.isArray(res)?res[0]:res;
   },
+  async deletePdv(uuid){
+    await this.api(`/rest/v1/pdvs?id=eq.${uuid}`,{method:"DELETE",
+      headers:{"Prefer":"return=minimal"}});
+  },
   /* Periods */
   async loadPeriods(){
     return this.api("/rest/v1/periodos?select=*&order=ano.desc,mes.desc");
@@ -1044,7 +1048,12 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
     const u=editing!==null?pdvs.map((p,i)=>i===editing?{...pdvs[editing],...f}:p):[...pdvs,f];
     setPdvs(u);save(u);closeForm();
   }
-  function del(idx){const u=pdvs.filter((_,i)=>i!==idx);setPdvs(u);save(u);}
+  function del(idx){
+    const p=pdvs[idx];
+    if(!confirm(`Excluir "${p.name}"?\n\nIsso também removerá:\n- Todos os dados mensais deste PDV\n- Todos os cálculos de repasse históricos\n\nEsta ação NÃO pode ser desfeita.`))return;
+    const u=pdvs.filter((_,i)=>i!==idx);
+    setPdvs(u);save(u);
+  }
 
   // Decide which pdv data to pass to the form
   const formPdv=editing!==null?pdvs[editing]:(formInitData||empty);
@@ -1399,7 +1408,7 @@ function CalcResults({pdvs,md,results,setResults,save,period}) {
 }
 
 /* ─── Pendencias ─── */
-function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRequestChange,isLocked}) {
+function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRequestChange,isLocked,activePeriod}) {
   const [editMode,setEditMode]=useState(false);
   const [pdvEdits,setPdvEdits]=useState({});
   const [mdEdits,setMdEdits]=useState({});
@@ -1488,6 +1497,7 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
           changes.push(`${p.name}: ${k}: ${old[k]||0} → ${v}`);
           changeReqs.push({tipo:"md_edit",pdv_vmpay_id:p.id,pdv_nome:p.name,campo:k,
             valor_atual:String(old[k]||0),valor_novo:String(v),
+            periodo_id:activePeriod?.id||null,periodo_nome:activePeriod?.nome||"",
             requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",
             requester_id:userRole?.user_id||null});
         }
@@ -1717,6 +1727,7 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
           changes.push(`${p.name}: ${label}: ${origMd[k]||0} → ${newMd[k]||0}`);
           changeReqs.push({tipo:"md_edit",pdv_vmpay_id:p.id,pdv_nome:p.name,campo:k,
             valor_atual:String(origMd[k]||0),valor_novo:String(newMd[k]||0),
+            periodo_id:activePeriod?.id||null,periodo_nome:activePeriod?.nome||"",
             requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",requester_id:userRole?.user_id||null});
         }
       });
@@ -1986,7 +1997,7 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
 }
 
 /* ─── Admin Panel (Master only) ─── */
-function AdminPanel({userRole,onRefresh}){
+function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
   const [users,setUsers]=useState([]);
   const [requests,setRequests]=useState([]);
   const [tab,setTab]=useState("users");
@@ -2023,11 +2034,40 @@ function AdminPanel({userRole,onRefresh}){
   }
 
   async function reviewReq(req,status){
-    try{await SB.reviewChangeRequest(req.id,status,userRole.user_id);
+    try{
+      // If approved, apply the actual change to the database
+      if(status==="aprovado"){
+        // Parse the new value back to the proper type
+        const numericFields=new Set(["negotiated_percentage","kwh_unity_price","minimal_repass","payment_day",
+          "meter_start","meter_end","raw_revenue","manual_adjustment","energy_bill_cond"]);
+        const intFields=new Set(["payment_day"]);
+        let parsedVal=req.valor_novo;
+        if(numericFields.has(req.campo)){
+          parsedVal=intFields.has(req.campo)?(parseInt(req.valor_novo)||0):(parseFloat(req.valor_novo)||0);
+        }
+
+        if(req.tipo==="pdv_edit"){
+          // Find the PDV uuid by vmpay_id
+          const targetPdv=allPdvs.find(p=>String(p.id)===String(req.pdv_vmpay_id));
+          if(!targetPdv||!targetPdv.uuid) throw new Error("PDV não encontrado para aplicar alteração");
+          // Map field name (name → nome)
+          const fieldKey=req.campo==="name"?"nome":req.campo;
+          await SB.patchPdv(targetPdv.uuid,{[fieldKey]:parsedVal});
+        }else if(req.tipo==="md_edit"){
+          if(!req.periodo_id) throw new Error("Solicitação antiga sem período associado — não é possível aplicar automaticamente. Aplique manualmente em Entrada de dados.");
+          const targetPdv=allPdvs.find(p=>String(p.id)===String(req.pdv_vmpay_id));
+          if(!targetPdv||!targetPdv.uuid) throw new Error("PDV não encontrado para aplicar alteração");
+          await SB.upsertMonthly(req.periodo_id,targetPdv.uuid,{[req.campo]:parsedVal});
+        }
+      }
+      // Mark the request as reviewed
+      await SB.reviewChangeRequest(req.id,status,userRole.user_id);
       audit(status==="aprovado"?"Aprovou solicitação":"Rejeitou solicitação",
         {entidade:req.tipo==="pdv_edit"?"PDV":"Dados mensais",entidade_nome:req.pdv_nome,
          campo:req.campo,valor_antigo:req.valor_atual,valor_novo:req.valor_novo,
+         periodo_nome:req.periodo_nome||"",
          descricao:`Solicitado por ${req.requester_nome||req.requester_email}${req.justificativa?` — Justificativa: "${req.justificativa}"`:""}`});
+      if(status==="aprovado"&&onApproved) await onApproved();
       await load();
     }catch(e){alert("Erro: "+e.message);}
   }
@@ -2503,6 +2543,20 @@ export default function App() {
       payment_day:"Dia pagamento",bank_cnpj_cond:"CNPJ cond",bank_cnpj:"CNPJ",bank_name:"Nome conta",
       bank_banco:"Banco",bank_agencia:"Agência",bank_conta:"Conta",bank_pix:"PIX"};
     let needsReload=false;
+    // Detect deleted PDVs (in old pdvs but not in newPdvs)
+    const newUuids=new Set(newPdvs.map(p=>p.uuid).filter(Boolean));
+    const deletedPdvs=pdvs.filter(p=>p.uuid&&!newUuids.has(p.uuid));
+    for(const dp of deletedPdvs){
+      try{
+        await SB.deletePdv(dp.uuid);
+        audit("Excluiu PDV",{entidade:"PDV",entidade_nome:dp.name,
+          descricao:`VMpay ID: ${dp.id||"(sem ID)"}, Tipo: ${dp.contract_type}`});
+      }catch(e){
+        console.error("Delete PDV error:",e);
+        alert(`Erro ao excluir "${dp.name}": ${e.message||"verifique o console"}`);
+        needsReload=true;
+      }
+    }
     for(const np of newPdvs){
       if(!np.uuid){
         // NEW PDV - INSERT into database
@@ -2767,7 +2821,12 @@ export default function App() {
             const res=await SB.loadResults(pid,revUuidMap);
             return res.map(r=>{const p=pdvs.find(x=>x.id===r.id);return {...r,name:p?.name||""};});
           }}/>}
-        {page==="admin"&&role==="master"&&<AdminPanel userRole={userRole}/>}
+        {page==="admin"&&role==="master"&&<AdminPanel userRole={userRole} allPdvs={pdvs}
+          onApproved={async()=>{
+            // Reload fresh PDVs and md from DB after a change is applied
+            try{const fresh=await SB.loadPdvs();setPdvs(fresh);}catch(e){console.error(e);}
+            if(activePeriod){try{const m=await SB.loadMonthlyData(activePeriod.id,revUuidMap);setMd(m);}catch(e){console.error(e);}}
+          }}/>}
         {page==="historico"&&<>
           <Historico periods={allPeriods} activePeriod={activePeriod}
             onSelectPeriod={handleSelectPeriod} onCreatePeriod={handleCreatePeriod} onUpdatePeriod={handleUpdatePeriod}
@@ -2775,7 +2834,7 @@ export default function App() {
           {activePeriod?<div style={{marginTop:24,paddingTop:20,borderTop:"2px solid var(--color-border-secondary)"}}>
             <Pendencias pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
               savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
-              userRole={userRole} isLocked={isLocked}
+              userRole={userRole} isLocked={isLocked} activePeriod={activePeriod}
               onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>
           </div>:<div className="card empty" style={{marginTop:16,textAlign:"center",fontSize:13,padding:20}}>
             Selecione um período acima para ver as pendências.
