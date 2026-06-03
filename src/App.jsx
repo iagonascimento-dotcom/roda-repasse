@@ -997,7 +997,6 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
   useEffect(()=>{
     if(prefilled&&prefilled.id){
       setEditing(null);setShowForm(true);
-      if(onPrefilledHandled) onPrefilledHandled();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[prefilled]);
@@ -1008,9 +1007,13 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
     p.contract_type?.toLowerCase().includes(search.toLowerCase())
   );
 
+  function closeForm(){
+    setShowForm(false);setEditing(null);
+    if(onPrefilledHandled) onPrefilledHandled();
+  }
   function savePdv(f){
     const u=editing!==null?pdvs.map((p,i)=>i===editing?{...pdvs[editing],...f}:p):[...pdvs,f];
-    setPdvs(u);save(u);setEditing(null);setShowForm(false);
+    setPdvs(u);save(u);closeForm();
   }
   function del(idx){const u=pdvs.filter((_,i)=>i!==idx);setPdvs(u);save(u);}
 
@@ -1020,7 +1023,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
       <button className="btn btn-p" onClick={()=>{setEditing(null);setShowForm(true);}}>+ Novo PDV</button>
     </div>
     <input placeholder="Buscar por nome, ID ou tipo..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:14}}/>
-    {showForm&&<PdvForm pdv={editing!==null?pdvs[editing]:(prefilled&&prefilled.id?{...empty,id:prefilled.id,name:prefilled.name||""}:empty)} onSave={savePdv} onCancel={()=>{setShowForm(false);setEditing(null);}}/>}
+    {showForm&&<PdvForm pdv={editing!==null?pdvs[editing]:(prefilled&&prefilled.id?{...empty,id:prefilled.id,name:prefilled.name||""}:empty)} onSave={savePdv} onCancel={closeForm}/>}
     <div className="scroll-x">
       <table><thead><tr>
         <th>ID</th><th>Nome</th><th>Contrato</th><th>Receita</th><th>%</th><th>kWh</th><th>Mínimo</th><th></th>
