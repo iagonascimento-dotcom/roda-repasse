@@ -983,7 +983,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
 }
 
 /* ─── PDV Manager ─── */
-function PdvManager({pdvs,setPdvs,save}) {
+function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
   const [search,setSearch]=useState("");
   const [editing,setEditing]=useState(null);
   const [showForm,setShowForm]=useState(false);
@@ -992,6 +992,15 @@ function PdvManager({pdvs,setPdvs,save}) {
     negotiated_percentage:0,kwh_unity_price:0,minimal_repass:0,manual_adjustment:0,
     manual_adjustment_description:"",payment_day:20,bank_cnpj_cond:"",bank_cnpj:"",
     bank_name:"",bank_banco:"",bank_agencia:"",bank_conta:"",bank_pix:""};
+
+  // Auto-open form when navigated from Conferência with prefilled data
+  useEffect(()=>{
+    if(prefilled&&prefilled.id){
+      setEditing(null);setShowForm(true);
+      if(onPrefilledHandled) onPrefilledHandled();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[prefilled]);
 
   const filtered=pdvs.filter(p=>
     p.name?.toLowerCase().includes(search.toLowerCase())||
@@ -1011,7 +1020,7 @@ function PdvManager({pdvs,setPdvs,save}) {
       <button className="btn btn-p" onClick={()=>{setEditing(null);setShowForm(true);}}>+ Novo PDV</button>
     </div>
     <input placeholder="Buscar por nome, ID ou tipo..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:14}}/>
-    {showForm&&<PdvForm pdv={editing!==null?pdvs[editing]:empty} onSave={savePdv} onCancel={()=>{setShowForm(false);setEditing(null);}}/>}
+    {showForm&&<PdvForm pdv={editing!==null?pdvs[editing]:(prefilled&&prefilled.id?{...empty,id:prefilled.id,name:prefilled.name||""}:empty)} onSave={savePdv} onCancel={()=>{setShowForm(false);setEditing(null);}}/>}
     <div className="scroll-x">
       <table><thead><tr>
         <th>ID</th><th>Nome</th><th>Contrato</th><th>Receita</th><th>%</th><th>kWh</th><th>Mínimo</th><th></th>
@@ -2152,7 +2161,7 @@ function AdminPanel({userRole,onRefresh}){
 }
 
 /* ─── Conferência de PDVs (importa Excel e detecta pendentes) ─── */
-function Conferencia({pdvs,userRole}){
+function Conferencia({pdvs,userRole,onCadastrar}){
   const [excelRows,setExcelRows]=useState([]); // {vmpay_id, nome}
   const [fileName,setFileName]=useState("");
   const [ignored,setIgnored]=useState([]);
@@ -2216,14 +2225,14 @@ function Conferencia({pdvs,userRole}){
     setBusy(false);
   }
 
-  // Build comparison sets
-  const registeredIds=new Set(pdvs.map(p=>String(p.vmpay_id||"").trim()));
+  // Build comparison sets — NOTE: pdvs in state have field "id" (mapped from vmpay_id at load)
+  const registeredIds=new Set(pdvs.map(p=>String(p.id||"").trim()));
   const ignoredIds=new Set(ignored.map(i=>String(i.vmpay_id).trim()));
   const excelIds=new Set(excelRows.map(r=>r.vmpay_id));
 
   const pendentes=excelRows.filter(r=>!registeredIds.has(r.vmpay_id)&&!ignoredIds.has(r.vmpay_id));
   const jaCadastrados=excelRows.filter(r=>registeredIds.has(r.vmpay_id));
-  const cadastradosNaoNoExcel=excelRows.length>0?pdvs.filter(p=>!excelIds.has(String(p.vmpay_id||"").trim())):[];
+  const cadastradosNaoNoExcel=excelRows.length>0?pdvs.filter(p=>!excelIds.has(String(p.id||"").trim())):[];
 
   return <div className="fade-in">
     {reasonModal&&<ReasonModal title="Marcar como não recebe repasse"
@@ -2271,7 +2280,11 @@ function Conferencia({pdvs,userRole}){
             <tr key={r.vmpay_id}>
               <td className="mono" style={{fontSize:12,fontWeight:600}}>{r.vmpay_id}</td>
               <td className="trunc" style={{fontSize:13}}>{r.nome||"—"}</td>
-              <td style={{textAlign:"right"}}>
+              <td style={{textAlign:"right",whiteSpace:"nowrap"}}>
+                <button className="btn btn-s" disabled={busy} style={{fontSize:11,padding:"4px 10px",marginRight:6,color:"var(--accent)",borderColor:"var(--accent)"}}
+                  onClick={()=>onCadastrar&&onCadastrar({id:r.vmpay_id,name:r.nome})}>
+                  ✎ Cadastrar
+                </button>
                 <button className="btn btn-s" disabled={busy}
                   style={{fontSize:11,padding:"4px 10px",color:"var(--color-text-secondary)"}}
                   onClick={()=>setReasonModal({vmpayId:r.vmpay_id,nome:r.nome})}>
@@ -2293,7 +2306,7 @@ function Conferencia({pdvs,userRole}){
           <thead><tr><th>VMpay ID</th><th>Nome</th><th>Tipo</th></tr></thead>
           <tbody>{cadastradosNaoNoExcel.map(p=>
             <tr key={p.id}>
-              <td className="mono" style={{fontSize:12}}>{p.vmpay_id}</td>
+              <td className="mono" style={{fontSize:12}}>{p.id}</td>
               <td className="trunc" style={{fontSize:13}}>{p.name}</td>
               <td style={{fontSize:11}}><span className="chip">{p.contract_type}</span></td>
             </tr>
@@ -2353,6 +2366,7 @@ export default function App() {
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>{
     try{return localStorage.getItem("sidebar-collapsed")==="1";}catch{return false;}
   });
+  const [prefilledPdv,setPrefilledPdv]=useState(null);
   function toggleSidebar(){
     setSidebarCollapsed(v=>{const n=!v;try{localStorage.setItem("sidebar-collapsed",n?"1":"0");}catch{}return n;});
   }
@@ -2716,8 +2730,10 @@ export default function App() {
             Selecione um período acima para ver as pendências.
           </div>}
         </>}
-        {page==="pdvs"&&<PdvManager pdvs={pdvs} setPdvs={setPdvs} save={savePdvsToSB}/>}
-        {page==="conferencia"&&<Conferencia pdvs={pdvs} userRole={userRole}/>}
+        {page==="pdvs"&&<PdvManager pdvs={pdvs} setPdvs={setPdvs} save={savePdvsToSB}
+          prefilled={prefilledPdv} onPrefilledHandled={()=>setPrefilledPdv(null)}/>}
+        {page==="conferencia"&&<Conferencia pdvs={pdvs} userRole={userRole}
+          onCadastrar={(data)=>{setPrefilledPdv(data);setPage("pdvs");}}/>}
         {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB}/>}
         {page==="calcular"&&<CalcResults pdvs={pdvs} md={md} results={results} setResults={setResults} save={saveResultsToSB} period={period}/>}
         {page==="demo"&&<Demonstrativo pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
