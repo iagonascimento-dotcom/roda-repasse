@@ -1048,11 +1048,14 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled}) {
     const u=editing!==null?pdvs.map((p,i)=>i===editing?{...pdvs[editing],...f}:p):[...pdvs,f];
     setPdvs(u);save(u);closeForm();
   }
-  function del(idx){
+  async function del(idx){
     const p=pdvs[idx];
     if(!confirm(`Excluir "${p.name}"?\n\nIsso também removerá:\n- Todos os dados mensais deste PDV\n- Todos os cálculos de repasse históricos\n\nEsta ação NÃO pode ser desfeita.`))return;
+    console.log("[PdvManager.del] Deletando:",p.name,"uuid:",p.uuid);
     const u=pdvs.filter((_,i)=>i!==idx);
-    setPdvs(u);save(u);
+    setPdvs(u);
+    try{await save(u);console.log("[PdvManager.del] Save concluído");}
+    catch(e){console.error("[PdvManager.del] Save error:",e);alert("Erro ao salvar: "+e.message);}
   }
 
   // Decide which pdv data to pass to the form
@@ -2546,13 +2549,17 @@ export default function App() {
     // Detect deleted PDVs (in old pdvs but not in newPdvs)
     const newUuids=new Set(newPdvs.map(p=>p.uuid).filter(Boolean));
     const deletedPdvs=pdvs.filter(p=>p.uuid&&!newUuids.has(p.uuid));
+    console.log("[savePdvsToSB] old count:",pdvs.length,"new count:",newPdvs.length,"to delete:",deletedPdvs.length);
     for(const dp of deletedPdvs){
+      console.log("[savePdvsToSB] DELETING:",dp.name,"uuid:",dp.uuid);
       try{
         await SB.deletePdv(dp.uuid);
+        console.log("[savePdvsToSB] DELETED OK:",dp.name);
         audit("Excluiu PDV",{entidade:"PDV",entidade_nome:dp.name,
           descricao:`VMpay ID: ${dp.id||"(sem ID)"}, Tipo: ${dp.contract_type}`});
+        needsReload=true;
       }catch(e){
-        console.error("Delete PDV error:",e);
+        console.error("[savePdvsToSB] Delete PDV error:",e);
         alert(`Erro ao excluir "${dp.name}": ${e.message||"verifique o console"}`);
         needsReload=true;
       }
@@ -2560,13 +2567,15 @@ export default function App() {
     for(const np of newPdvs){
       if(!np.uuid){
         // NEW PDV - INSERT into database
+        console.log("[savePdvsToSB] CREATING new PDV:",np.name,"vmpay:",np.id);
         try{
           const created=await SB.createPdv(np);
+          console.log("[savePdvsToSB] CREATED OK:",created);
           audit("Criou PDV",{entidade:"PDV",entidade_nome:np.name,
             descricao:`VMpay ID: ${np.id||"(sem ID)"}, Tipo: ${np.contract_type}`});
           needsReload=true;
         }catch(e){
-          console.error("Create PDV error:",e);
+          console.error("[savePdvsToSB] Create PDV error:",e);
           alert("Erro ao criar PDV: "+(e.message||"verifique o console"));
         }
         continue;
@@ -2585,13 +2594,21 @@ export default function App() {
           kwh_unity_price:np.kwh_unity_price,minimal_repass:np.minimal_repass,
           payment_day:np.payment_day,bank_cnpj_cond:np.bank_cnpj_cond,bank_cnpj:np.bank_cnpj,
           bank_name:np.bank_name,bank_banco:np.bank_banco,bank_agencia:np.bank_agencia,
-          bank_conta:np.bank_conta,bank_pix:np.bank_pix});}catch(e){console.error("Save PDV error:",e);}
+          bank_conta:np.bank_conta,bank_pix:np.bank_pix});}catch(e){console.error("[savePdvsToSB] Patch PDV error:",e);}
       }
     }
     if(auditItems.length>0) auditBatch("Editou cadastro PDV",auditItems);
-    // Reload from DB to get the uuids of newly created PDVs
+    // Reload from DB to ensure UI matches DB (uuids for new, removed for deleted)
     if(needsReload){
-      try{const fresh=await SB.loadPdvs();setPdvs(fresh);}catch(e){console.error("Reload error:",e);}
+      try{
+        console.log("[savePdvsToSB] Reloading PDVs from DB...");
+        const fresh=await SB.loadPdvs();
+        setPdvs(fresh);
+        const um={},rm={};
+        fresh.forEach(p=>{um[p.id]=p.uuid;rm[p.uuid]=p.id;});
+        setUuidMap(um);setRevUuidMap(rm);
+        console.log("[savePdvsToSB] Reloaded, new count:",fresh.length);
+      }catch(e){console.error("[savePdvsToSB] Reload error:",e);}
     }
   }
 
