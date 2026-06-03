@@ -1168,7 +1168,7 @@ function PdvForm({pdv,onSave,onCancel,isUsuario}) {
         {CONTRACT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
       <Field label="Receita"><select value={f.revenue_consideration} onChange={e=>s("revenue_consideration",e.target.value)}>
         {REV_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
-      <Field label="% Negociado"><input type="number" step="0.001" value={f.negotiated_percentage} onFocus={e=>e.target.select()} onChange={e=>s("negotiated_percentage",parseFloat(e.target.value)||0)}/></Field>
+      <Field label="% Negociado"><input type="number" step="0.01" value={(f.negotiated_percentage||0)*100} onFocus={e=>e.target.select()} onChange={e=>s("negotiated_percentage",(parseFloat(e.target.value)||0)/100)}/></Field>
       <Field label="kWh preço"><input type="number" step="0.01" value={f.kwh_unity_price} onFocus={e=>e.target.select()} onChange={e=>s("kwh_unity_price",parseFloat(e.target.value)||0)}/></Field>
       <Field label="Mínimo"><input type="number" step="0.01" value={f.minimal_repass} onFocus={e=>e.target.select()} onChange={e=>s("minimal_repass",parseFloat(e.target.value)||0)}/></Field>
       <Field label="Dia pgto"><input type="number" value={f.payment_day} onFocus={e=>e.target.select()} onChange={e=>s("payment_day",parseInt(e.target.value)||20)}/></Field>
@@ -1632,11 +1632,26 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
               {j===0?<td rowSpan={pIssues.filter(x=>filter==="all"||x.cat===filter).length} style={{verticalAlign:"top"}}><span className="chip">{p.contract_type}</span></td>:null}
               <td><span className={`badge badge-${catColors[is.cat]}`}>{cats[is.cat]}</span><span style={{marginLeft:6,fontSize:12}}>{is.msg}</span></td>
               <td className="mono" style={{fontSize:11}}>{is.field}</td>
-              <td className="mono" style={{fontSize:12,color:!getVal(p.id,is.field,is.isMd)?"var(--red)":"inherit"}}>{getVal(p.id,is.field,is.isMd)||"(vazio)"}</td>
+              <td className="mono" style={{fontSize:12,color:!getVal(p.id,is.field,is.isMd)?"var(--red)":"inherit"}}>
+                {(()=>{const v=getVal(p.id,is.field,is.isMd);if(!v)return "(vazio)";
+                  if(is.field==="negotiated_percentage") return `${((parseFloat(v)||0)*100).toFixed(1)}%`;
+                  return v;})()}
+              </td>
               {editMode&&<td><input style={{...eStyle,width:is.field.includes("name")?160:is.field.includes("cnpj")?140:100}}
                 type={is.isMd||["kwh_unity_price","negotiated_percentage","minimal_repass"].includes(is.field)?"number":"text"}
-                value={is.isMd?(mdEdits[p.id]?.[is.field]??""):(pdvEdits[p.id]?.[is.field]??getVal(p.id,is.field,false))}
-                onChange={e=>setVal(p.id,is.field,e.target.value,is.isMd)}/></td>}
+                step={is.field==="negotiated_percentage"?"0.01":"any"}
+                onFocus={e=>e.target.select()}
+                value={(()=>{
+                  const editedVal=is.isMd?mdEdits[p.id]?.[is.field]:pdvEdits[p.id]?.[is.field];
+                  const baseVal=editedVal!==undefined?editedVal:getVal(p.id,is.field,false);
+                  if(is.field==="negotiated_percentage") return (parseFloat(baseVal)||0)*100;
+                  return baseVal??"";
+                })()}
+                onChange={e=>{
+                  let v=e.target.value;
+                  if(is.field==="negotiated_percentage") v=(parseFloat(v)||0)/100;
+                  setVal(p.id,is.field,v,is.isMd);
+                }}/></td>}
             </tr>
           )
         )}</tbody></table></div></div>
@@ -1838,11 +1853,20 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
   const totalRepasse=rows.reduce((s,r)=>s+r.total,0),totalSub=rows.reduce((s,r)=>s+r.sub,0);
 
   const editSt2={padding:"3px 6px",fontSize:12,borderRadius:5,border:"1.5px solid var(--accent)",background:"#fffbe6"};
-  function ec(pid,field,val,isMd,w){
+  function ec(pid,field,val,isMd,w,isPct){
     if(!editMode) return typeof val==="number"?(val>0||val<0?fmt(val):"-"):val;
-    return <input type="number" style={{...editSt2,width:w||80}}
-      value={isMd?(localMd[pid]?.[field]??""):(localPdvEdits[pid]?.[field]??val)}
-      onChange={e=>isMd?editMd(pid,field,e.target.value):editPdvField(pid,field,e.target.value)}/>;
+    // For percent fields: display as percentage (multiply by 100), store as decimal (divide by 100)
+    const rawStored=isMd?(localMd[pid]?.[field]??val):(localPdvEdits[pid]?.[field]??val);
+    const displayVal=isPct?(rawStored||0)*100:rawStored;
+    return <input type="number" style={{...editSt2,width:w||80}} step={isPct?"0.01":"any"}
+      value={displayVal}
+      onChange={e=>{
+        const raw=parseFloat(e.target.value)||0;
+        const stored=isPct?raw/100:raw;
+        if(isMd) setLocalMd(o=>({...o,[pid]:{...(o[pid]||{}),[field]:stored}}));
+        else setLocalPdvEdits(o=>({...o,[pid]:{...(o[pid]||{}),[field]:stored}}));
+        setChangeCount(c=>c+1);
+      }}/>;
   }
 
   return <div className="fade-in">
@@ -1906,7 +1930,7 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
         {hasRev&&<><td className="mono">{editMode?ec(r.pid,"raw_revenue",r.raw,true,90):(r.raw>0?fmt(r.raw):"-")}</td>
           <td><span className={`badge ${r.revType==="Bruto"?"badge-warn":"badge-info"}`}>{r.revType}</span></td>
           <td className="mono">{r.cr>0?fmt(r.cr):"-"}</td>
-          <td className="mono">{editMode?ec(r.pid,"negotiated_percentage",r.pct,false,60):`${(r.pct*100).toFixed(1)}%`}</td>
+          <td className="mono">{editMode?ec(r.pid,"negotiated_percentage",r.pct,false,60,true):`${(r.pct*100).toFixed(1)}%`}</td>
           <td className="mono" style={{fontWeight:600,color:r.pr>0?"inherit":"var(--color-text-tertiary)"}}>{r.pr>0?fmt(r.pr):"-"}</td></>}
         {isEnergyConta&&<td className="mono">{editMode?ec(r.pid,"energy_bill_cond",r.eBillCond,true,90):(r.eBillCond>0?fmt(r.eBillCond):"-")}</td>}
         {hasOU&&<td><span className={`badge ${r.winner==="Energia"?"badge-warn":r.winner==="%Fat"?"badge-info":"badge-ok"}`}>{r.winner}</span></td>}
