@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import * as XLSX from "xlsx";
 
 const CONTRACT_TYPES = [
   "Medidor","Fixo","Percentual do Faturamento","Medidor + Mínimo",
@@ -234,6 +235,20 @@ const SB = {
     if(filters.to) q+=`&created_at=lte.${filters.to}`;
     if(filters.search) q+=`&or=(entidade_nome.ilike.*${encodeURIComponent(filters.search)}*,descricao.ilike.*${encodeURIComponent(filters.search)}*)`;
     return this.api(q);
+  },
+  /* PDVs ignorados (não recebem repasse) */
+  async loadIgnored(){
+    return this.api("/rest/v1/pdvs_ignorados?select=*&order=created_at.desc");
+  },
+  async addIgnored(vmpay_id,nome,motivo){
+    const u=this.currentUser||{};
+    await this.api("/rest/v1/pdvs_ignorados",{method:"POST",
+      body:JSON.stringify({vmpay_id:String(vmpay_id),nome:nome||"",motivo:motivo||"",created_by_email:u.email||""}),
+      headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
+  },
+  async removeIgnored(vmpay_id){
+    await this.api(`/rest/v1/pdvs_ignorados?vmpay_id=eq.${encodeURIComponent(vmpay_id)}`,
+      {method:"DELETE",headers:{"Prefer":"return=minimal"}});
   },
 };
 
@@ -2136,6 +2151,197 @@ function AdminPanel({userRole,onRefresh}){
   </div>;
 }
 
+/* ─── Conferência de PDVs (importa Excel e detecta pendentes) ─── */
+function Conferencia({pdvs,userRole}){
+  const [excelRows,setExcelRows]=useState([]); // {vmpay_id, nome}
+  const [fileName,setFileName]=useState("");
+  const [ignored,setIgnored]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [reasonModal,setReasonModal]=useState(null); // {vmpayId, nome, onConfirm}
+
+  async function loadIgnoredList(){
+    try{const data=await SB.loadIgnored();setIgnored(data||[]);}catch(e){console.error(e);}
+  }
+  useEffect(()=>{loadIgnoredList();},[]);
+
+  function parseFile(file){
+    setErr("");setLoading(true);setFileName(file.name);
+    const reader=new FileReader();
+    reader.onload=(e)=>{
+      try{
+        const data=new Uint8Array(e.target.result);
+        const wb=XLSX.read(data,{type:"array"});
+        const sheet=wb.Sheets[wb.SheetNames[0]];
+        const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:""});
+        if(rows.length===0){setErr("Planilha vazia.");setLoading(false);return;}
+        // Try to identify the ID and Name columns by header
+        const header=rows[0].map(c=>String(c).toLowerCase().trim());
+        let idCol=header.findIndex(h=>/vmpay|id|código|codigo|cod/.test(h));
+        let nameCol=header.findIndex(h=>/nome|pdv|loja|cliente/.test(h));
+        if(idCol===-1) idCol=0;
+        if(nameCol===-1) nameCol=idCol===1?0:1;
+        const parsed=[];
+        for(let i=1;i<rows.length;i++){
+          const r=rows[i];if(!r)continue;
+          const vid=String(r[idCol]||"").trim().replace(/\.0$/,"");
+          const nome=String(r[nameCol]||"").trim();
+          if(vid) parsed.push({vmpay_id:vid,nome});
+        }
+        if(parsed.length===0){setErr("Nenhum PDV encontrado. Verifique se a planilha tem colunas de ID e Nome.");setLoading(false);return;}
+        setExcelRows(parsed);setLoading(false);
+      }catch(ex){console.error(ex);setErr("Erro ao ler arquivo: "+ex.message);setLoading(false);}
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  async function markIgnored(vmpayId,nome,motivo){
+    setBusy(true);
+    try{
+      await SB.addIgnored(vmpayId,nome,motivo);
+      audit("Marcou PDV como sem repasse",{entidade:"PDV",entidade_nome:`${nome} (${vmpayId})`,descricao:motivo||""});
+      await loadIgnoredList();
+    }catch(e){alert("Erro: "+e.message);}
+    setBusy(false);
+  }
+  async function unmarkIgnored(vmpayId,nome){
+    if(!confirm(`Reativar "${nome}" como pendente de cadastro?`))return;
+    setBusy(true);
+    try{
+      await SB.removeIgnored(vmpayId);
+      audit("Reativou PDV pendente",{entidade:"PDV",entidade_nome:`${nome} (${vmpayId})`});
+      await loadIgnoredList();
+    }catch(e){alert("Erro: "+e.message);}
+    setBusy(false);
+  }
+
+  // Build comparison sets
+  const registeredIds=new Set(pdvs.map(p=>String(p.vmpay_id||"").trim()));
+  const ignoredIds=new Set(ignored.map(i=>String(i.vmpay_id).trim()));
+  const excelIds=new Set(excelRows.map(r=>r.vmpay_id));
+
+  const pendentes=excelRows.filter(r=>!registeredIds.has(r.vmpay_id)&&!ignoredIds.has(r.vmpay_id));
+  const jaCadastrados=excelRows.filter(r=>registeredIds.has(r.vmpay_id));
+  const cadastradosNaoNoExcel=excelRows.length>0?pdvs.filter(p=>!excelIds.has(String(p.vmpay_id||"").trim())):[];
+
+  return <div className="fade-in">
+    {reasonModal&&<ReasonModal title="Marcar como não recebe repasse"
+      pdvLabel={`${reasonModal.nome} (${reasonModal.vmpayId})`}
+      placeholder="Ex: PDV desativado, contrato encerrado, máquina removida..."
+      onConfirm={async(reason)=>{await markIgnored(reasonModal.vmpayId,reasonModal.nome,reason);setReasonModal(null);}}
+      onCancel={()=>setReasonModal(null)}/>}
+    <div className="h2" style={{marginBottom:12}}>Conferência de PDVs</div>
+    <p style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>
+      Importe uma planilha (Excel/CSV) com a lista de PDVs ativos do VMpay. O sistema vai mostrar quais ainda não estão cadastrados aqui na plataforma.
+    </p>
+
+    <div className="card">
+      <div className="h3">1. Importar planilha</div>
+      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+        <label className="btn btn-p" style={{cursor:"pointer"}}>
+          📂 Escolher arquivo
+          <input type="file" accept=".xlsx,.xls,.csv" style={{display:"none"}}
+            onChange={e=>{const f=e.target.files[0];if(f)parseFile(f);e.target.value="";}}/>
+        </label>
+        {fileName&&<span style={{fontSize:12,color:"var(--color-text-secondary)"}}>📄 {fileName} — <strong>{excelRows.length}</strong> PDV(s) na planilha</span>}
+        {excelRows.length>0&&<button className="btn btn-s" onClick={()=>{setExcelRows([]);setFileName("");}}>Limpar</button>}
+      </div>
+      {loading&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:8}}>Lendo arquivo...</div>}
+      {err&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",fontSize:12,marginTop:8}}>⚠ {err}</div>}
+      <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:8}}>
+        Aceita .xlsx, .xls e .csv. As colunas devem conter o <strong>ID VMpay</strong> e o <strong>Nome</strong>. O sistema tenta identificar automaticamente.
+      </div>
+    </div>
+
+    {excelRows.length>0&&<>
+      <div className="grid4" style={{marginBottom:16,marginTop:16}}>
+        <Stat val={excelRows.length} label="Total na planilha" color="#00314f"/>
+        <Stat val={jaCadastrados.length} label="Já cadastrados" color="#9bf400" sub={`${((jaCadastrados.length/excelRows.length)*100).toFixed(0)}% da planilha`}/>
+        <Stat val={pendentes.length} label="Pendentes" color="#ff8b00" sub={pendentes.length>0?"Precisa cadastrar":"Tudo certo ✓"}/>
+        <Stat val={cadastradosNaoNoExcel.length} label="Na plataforma, fora da planilha" color="#888" sub="Possível inativo"/>
+      </div>
+
+      <div className="card">
+        <div className="h3">🟠 PDVs pendentes de cadastro ({pendentes.length})</div>
+        {pendentes.length===0?<div className="empty" style={{padding:16,fontSize:13}}>✓ Todos os PDVs da planilha já estão cadastrados!</div>:
+        <div className="scroll-x"><table>
+          <thead><tr><th>VMpay ID</th><th>Nome (da planilha)</th><th style={{textAlign:"right"}}>Ação</th></tr></thead>
+          <tbody>{pendentes.map(r=>
+            <tr key={r.vmpay_id}>
+              <td className="mono" style={{fontSize:12,fontWeight:600}}>{r.vmpay_id}</td>
+              <td className="trunc" style={{fontSize:13}}>{r.nome||"—"}</td>
+              <td style={{textAlign:"right"}}>
+                <button className="btn btn-s" disabled={busy}
+                  style={{fontSize:11,padding:"4px 10px",color:"var(--color-text-secondary)"}}
+                  onClick={()=>setReasonModal({vmpayId:r.vmpay_id,nome:r.nome})}>
+                  🚫 Não recebe repasse
+                </button>
+              </td>
+            </tr>
+          )}</tbody>
+        </table></div>}
+        {pendentes.length>0&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:8}}>
+          Para cadastrar: vá em <strong>Cadastro PDVs</strong> e crie cada um, ou marque como "não recebe repasse" se for o caso.
+        </div>}
+      </div>
+
+      {cadastradosNaoNoExcel.length>0&&<div className="card">
+        <div className="h3">⚠ Cadastrados aqui mas não estão na planilha ({cadastradosNaoNoExcel.length})</div>
+        <p style={{fontSize:11,color:"var(--color-text-secondary)",marginBottom:8}}>Esses PDVs existem aqui mas o VMpay não enviou. Possivelmente foram desativados.</p>
+        <div className="scroll-x"><table>
+          <thead><tr><th>VMpay ID</th><th>Nome</th><th>Tipo</th></tr></thead>
+          <tbody>{cadastradosNaoNoExcel.map(p=>
+            <tr key={p.id}>
+              <td className="mono" style={{fontSize:12}}>{p.vmpay_id}</td>
+              <td className="trunc" style={{fontSize:13}}>{p.name}</td>
+              <td style={{fontSize:11}}><span className="chip">{p.contract_type}</span></td>
+            </tr>
+          )}</tbody>
+        </table></div>
+      </div>}
+    </>}
+
+    <div className="card">
+      <div className="h3">🚫 PDVs marcados como sem repasse ({ignored.length})</div>
+      {ignored.length===0?<div className="empty" style={{padding:16,fontSize:12}}>Nenhum PDV marcado.</div>:
+      <div className="scroll-x"><table>
+        <thead><tr><th>VMpay ID</th><th>Nome</th><th>Motivo</th><th>Marcado por</th><th>Data</th><th style={{textAlign:"right"}}>Ação</th></tr></thead>
+        <tbody>{ignored.map(i=>
+          <tr key={i.id}>
+            <td className="mono" style={{fontSize:12,fontWeight:600}}>{i.vmpay_id}</td>
+            <td className="trunc" style={{fontSize:13}}>{i.nome||"—"}</td>
+            <td style={{fontSize:12}}>{i.motivo||"—"}</td>
+            <td style={{fontSize:11}}>{i.created_by_email||"—"}</td>
+            <td style={{fontSize:11,whiteSpace:"nowrap"}}>{new Date(i.created_at).toLocaleDateString("pt-BR")}</td>
+            <td style={{textAlign:"right"}}>
+              <button className="btn btn-s" disabled={busy} style={{fontSize:11,padding:"4px 10px"}}
+                onClick={()=>unmarkIgnored(i.vmpay_id,i.nome)}>↺ Reativar</button>
+            </td>
+          </tr>
+        )}</tbody>
+      </table></div>}
+    </div>
+  </div>;
+}
+
+function ReasonModal({title,pdvLabel,placeholder,onConfirm,onCancel}){
+  const [v,setV]=useState("");
+  return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999}} onClick={onCancel}>
+    <div style={{background:"#fff",borderRadius:12,padding:24,maxWidth:460,width:"90%",boxShadow:"0 20px 60px rgba(0,0,0,0.2)"}} onClick={e=>e.stopPropagation()}>
+      <div style={{fontSize:15,fontWeight:700,marginBottom:6}}>{title}</div>
+      <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>PDV: <strong>{pdvLabel}</strong></div>
+      <label style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:4}}>Motivo (opcional)</label>
+      <textarea value={v} onChange={e=>setV(e.target.value)} placeholder={placeholder} rows={3} autoFocus
+        style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}/>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+        <button className="btn btn-s" onClick={onCancel}>Cancelar</button>
+        <button className="btn btn-p" onClick={()=>onConfirm(v.trim())}>Confirmar</button>
+      </div>
+    </div>
+  </div>;
+}
+
 /* ─── LOGO SVG DATA ─── */
 const LOGO_SVG = "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBzdGFuZGFsb25lPSJubyI/Pgo8IURPQ1RZUEUgc3ZnIFBVQkxJQyAiLS8vVzNDLy9EVEQgU1ZHIDEuMS8vRU4iICJodHRwOi8vd3d3LnczLm9yZy9HcmFwaGljcy9TVkcvMS4xL0RURC9zdmcxMS5kdGQiPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiIHdpZHRoPSI4NC43NSIgem9vbUFuZFBhbj0ibWFnbmlmeSIgdmlld0JveD0iMCAwIDg0Ljc1IDg0Ljc0OTk5OSIgaGVpZ2h0PSI4NC43NSIgcHJlc2VydmVBc3BlY3RSYXRpbz0ieE1pZFlNaWQgbWVldCIgdmVyc2lvbj0iMS4wIj48ZGVmcz48Y2xpcFBhdGggaWQ9ImE5MDUwMjIzOTciPjxwYXRoIGQ9Ik0gMzYuMjgxMjUgMjcuNTkzNzUgTCA1Ny4yNDYwOTQgMjcuNTkzNzUgTCA1Ny4yNDYwOTQgNTcuMTk1MzEyIEwgMzYuMjgxMjUgNTcuMTk1MzEyIFogTSAzNi4yODEyNSAyNy41OTM3NSAiIGNsaXAtcnVsZT0ibm9uemVybyIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSI2NjgxZmQxZjQ3Ij48cGF0aCBkPSJNIDQ3LjEwOTM3NSA0My43NSBDIDQ3LjAxMTcxOSA0My42NDA2MjUgNDYuOTEwMTU2IDQzLjUzMTI1IDQ2LjgyMDMxMiA0My40MjE4NzUgQyA0Ni4wNTQ2ODggNDMuOTQ5MjE5IDQ1LjI1NzgxMiA0NC40Mzc1IDQ0LjUxOTUzMSA0NS4wMTU2MjUgQyA0Mi45NDE0MDYgNDYuMjIyNjU2IDQxLjUxNTYyNSA0Ny42MDkzNzUgNDAuNjk5MjE5IDQ5LjUxMTcxOSBDIDQwLjE3OTY4OCA1MC42OTkyMTkgMzkuOTE0MDYyIDUxLjk1NzAzMSA0MC4zMTI1IDUzLjU2MjUgQyA0My44MzIwMzEgNTEuMDI3MzQ0IDQ1LjE4NzUgNDcuMTcxODc1IDQ3LjEyMTA5NCA0My43NSBNIDQ2LjcyMjY1NiAzOS4yNTM5MDYgQyA0Ni45Mjk2ODggMzkuMzA0Njg4IDQ3LjQxMDE1NiAzOS4zMjQyMTkgNDcuNzg5MDYyIDM5LjUyMzQzOCBDIDQ4LjUyNzM0NCAzOS45MjE4NzUgNDguNzE0ODQ0IDM5LjU4MjAzMSA0OC45MTQwNjIgMzguODk0NTMxIEMgNDkuNTgyMDMxIDM2LjU0Mjk2OSA1MC4zMDA3ODEgMzQuMTg3NSA1MS4wMzEyNSAzMS44NTU0NjkgQyA1MS4zMzk4NDQgMzAuODY3MTg4IDUxLjcyNjU2MiAyOS45MDIzNDQgNTIuMDY2NDA2IDI4LjkyNTc4MSBDIDUyLjI0NjA5NCAyOC4zOTQ1MzEgNTIuNTkzNzUgMjguMTk1MzEyIDUzLjEyNSAyOC4xMzY3MTkgQyA1NC4xMjg5MDYgMjguMDE1NjI1IDU1LjEzNjcxOSAyNy44MDg1OTQgNTYuMTQ0NTMxIDI3LjY1NjI1IEMgNTYuMzI0MjE5IDI3LjYyODkwNiA1Ni42NDQ1MzEgMjcuNjk5MjE5IDU2LjY4MzU5NCAyNy44MDg1OTQgQyA1Ni45ODA0NjkgMjguNjA1NDY5IDU3LjQ0OTIxOSAyOS40MjE4NzUgNTYuOTQxNDA2IDMwLjI4OTA2MiBDIDU0LjUwNzgxMiAzNC4zOTg0MzggNTMuNjYwMTU2IDM5LjA0Mjk2OSA1Mi43MzQzNzUgNDMuNjcxODc1IEMgNTIuMjE0ODQ0IDQ2LjI3MzQzOCA1MS44NzUgNDguOTE0MDYyIDUxLjQzNzUgNTEuNTQ2ODc1IEMgNTEuMjE4NzUgNTIuOTAyMzQ0IDUxLjMwODU5NCA1NC4xOTkyMTkgNTIuMDI3MzQ0IDU1LjQwNjI1IEMgNTIuMTM2NzE5IDU1LjU5Mzc1IDUyLjA0Njg3NSA1Ni4wOTM3NSA1MS44NzUgNTYuMjUzOTA2IEMgNTAuNTcwMzEyIDU3LjQ4MDQ2OSA1MC40MDIzNDQgNTcuNDgwNDY5IDQ5LjIyNjU2MiA1Ni4wODIwMzEgQyA0OC41ODU5MzggNTUuMzI0MjE5IDQ4LjA0Njg3NSA1NC40NzY1NjIgNDcuNSA1My42NDA2MjUgQyA0Ni44MDA3ODEgNTIuNTg1OTM4IDQ2LjYzMjgxMiA1Mi41MTU2MjUgNDUuOTI1NzgxIDUzLjU4MjAzMSBDIDQ0LjkzNzUgNTUuMDY2NDA2IDQzLjY0MDYyNSA1NS45NzI2NTYgNDEuOTY0ODQ0IDU2LjM3MTA5NCBDIDM5LjM1NTQ2OSA1Ny4wMTE3MTkgMzcuMTc5Njg4IDU1LjYxMzI4MSAzNi41ODIwMzEgNTIuODgyODEyIEMgMzUuMTY3OTY5IDQ2LjM4MjgxMiAzOS45MjE4NzUgMzkuNzMwNDY5IDQ2LjMyNDIxOSAzOS4yNTM5MDYgQyA0Ni4zODI4MTIgMzkuMjQyMTg4IDQ2LjQzMzU5NCAzOS4yNTM5MDYgNDYuNzEwOTM4IDM5LjI1MzkwNiAiIGNsaXAtcnVsZT0ibm9uemVybyIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSIyODlhZWJhNWY0Ij48cGF0aCBkPSJNIDUzLjY5OTIxOSAzNi41MzUxNTYgTCA3NC4yMDMxMjUgMzYuNTM1MTU2IEwgNzQuMjAzMTI1IDU2LjI2OTUzMSBMIDUzLjY5OTIxOSA1Ni4yNjk1MzEgWiBNIDUzLjY5OTIxOSAzNi41MzUxNTYgIiBjbGlwLXJ1bGU9Im5vbnplcm8iLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iMzY4MjBlZGIyMSI+PHBhdGggZD0iTSA1Ny44NjcxODggNTEuNzg1MTU2IEMgNTkuNjY0MDYyIDUxLjM0NzY1NiA2NC41ODk4NDQgNDMuOTQ5MjE5IDY0LjM5ODQzOCA0Mi4wMzUxNTYgQyA2MC41MTk1MzEgNDQuMDg5ODQ0IDU2Ljg4MjgxMiA0OC4wNTg1OTQgNTcuODY3MTg4IDUxLjc4NTE1NiBNIDc0LjE5OTIxOSA1My4zODI4MTIgQyA3Mi44NjMyODEgNTYuMDkzNzUgNjkuMDA3ODEyIDU3LjEwOTM3NSA2Ni43OTI5NjkgNTUuNDU3MDMxIEMgNjUuOTg0Mzc1IDU0Ljg1NTQ2OSA2NS42NTYyNSA1My45ODgyODEgNjUuNTE1NjI1IDUzLjAxMTcxOSBDIDY1LjQwNjI1IDUyLjI0NjA5NCA2NS4yODkwNjIgNTEuNDg4MjgxIDY1LjE0ODQzOCA1MC40ODgyODEgQyA2NC40Njg3NSA1MS4yNDYwOTQgNjMuODgyODEyIDUxLjgwNDY4OCA2My4zOTQ1MzEgNTIuNDQ1MzEyIEMgNjEuOTM3NSA1NC4zNzg5MDYgNjAuMTMyODEyIDU1LjU5Mzc1IDU3LjczMDQ2OSA1NS44MjQyMTkgQyA1Ni45NDE0MDYgNTUuODk0NTMxIDU2LjMxMjUgNTUuNzY1NjI1IDU1Ljc1MzkwNiA1NS4yMTQ4NDQgQyA1My44MzIwMzEgNTMuMzMyMDMxIDUzLjMwMDc4MSA1MSA1NC4yMTg3NSA0OC40MjU3ODEgQyA1NS44NzUgNDMuNzgxMjUgNTguNjE3MTg4IDQwLjA2MjUgNjIuODE2NDA2IDM3LjY2MDE1NiBDIDY1LjE5OTIxOSAzNi4zMDA3ODEgNjcuNjQwNjI1IDM2LjIyMjY1NiA3MC4wMTE3MTkgMzcuNjY3OTY5IEMgNzEuNTI3MzQ0IDM4LjU4NTkzOCA3MS44MzU5MzggMzkuODMyMDMxIDcwLjk2MDkzOCA0MS40MjU3ODEgQyA3MC4yMDMxMjUgNDIuNzkyOTY5IDY5Ljc1MzkwNiA0NC4xODc1IDY5Ljc5Mjk2OSA0NS43OTI5NjkgQyA2OS44NTU0NjkgNDcuNzU3ODEyIDY5LjY2NDA2MiA0OS43NDIxODggNjkuODYzMjgxIDUxLjY5NTMxMiBDIDcwLjA5Mzc1IDUzLjg5ODQzOCA3MC45NjA5MzggNTQuMzU5Mzc1IDczLjAyMzQzOCA1My43NDIxODggQyA3My4zODI4MTIgNTMuNjMyODEyIDczLjc0MjE4OCA1My41MTk1MzEgNzQuMTkxNDA2IDUzLjM4MjgxMiAiIGNsaXAtcnVsZT0ibm9uemVybyIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSJhZTQyMmIxYzkzIj48cGF0aCBkPSJNIDIxLjMyODEyNSAzOC4zODY3MTkgTCAzNi4yODEyNSAzOC4zODY3MTkgTCAzNi4yODEyNSA1Ny4xOTUzMTIgTCAyMS4zMjgxMjUgNTcuMTk1MzEyIFogTSAyMS4zMjgxMjUgMzguMzg2NzE5ICIgY2xpcC1ydWxlPSJub256ZXJvIi8+PC9jbGlwUGF0aD48Y2xpcFBhdGggaWQ9IjM2NTM5YTdmNDUiPjxwYXRoIGQ9Ik0gMjUuNzY1NjI1IDUxLjk0NTMxMiBDIDI1Ljc2NTYyNSA1Mi4xNzU3ODEgMjUuNzUzOTA2IDUyLjQxNDA2MiAyNS43NjU2MjUgNTIuNjQ0NTMxIEMgMjUuODA0Njg4IDUzLjY3MTg3NSAyNi4wOTM3NSA1My44Nzg5MDYgMjYuOTIxODc1IDUzLjMyMDMxMiBDIDI3LjU4OTg0NCA1Mi44NzUgMjguMjQ2MDk0IDUyLjMzNTkzOCAyOC43MjY1NjIgNTEuNjk1MzEyIEMgMzAuNjAxNTYyIDQ5LjE3NTc4MSAzMS4zMTY0MDYgNDYuMjIyNjU2IDMxLjM4NjcxOSA0My4wODIwMzEgQyAzMS4zOTg0MzggNDIuNzkyOTY5IDMxLjA3MDMxMiA0Mi4zMTI1IDMwLjgwODU5NCA0Mi4yMzQzNzUgQyAzMC4zMDA3ODEgNDIuMDc0MjE5IDI5LjY3MTg3NSA0MS42Njc5NjkgMjkuMjE0ODQ0IDQyLjM1NTQ2OSBDIDI3LjMwMDc4MSA0NS4yNDYwOTQgMjUuNjU2MjUgNDguMjU3ODEyIDI1Ljc2NTYyNSA1MS45NDUzMTIgTSAyMS4zOTg0MzggNTEuMzI4MTI1IEMgMjEuNDg4MjgxIDQ2LjMyNDIxOSAyMy4zMzk4NDQgNDIuNTIzNDM4IDI2LjU4MjAzMSAzOS40NTMxMjUgQyAyNy41ODk4NDQgMzguNDk2MDk0IDI4Ljc1MzkwNiAzOC4xMjUgMzAuMDg5ODQ0IDM4Ljg4MjgxMiBDIDMwLjQ2ODc1IDM5LjA5Mzc1IDMwLjk4ODI4MSAzOS4wMzUxNTYgMzEuNDM3NSAzOS4wODU5MzggQyAzMi42NDQ1MzEgMzkuMjAzMTI1IDMzLjg1OTM3NSAzOS4yMzQzNzUgMzUuMDQ2ODc1IDM5LjQ1MzEyNSBDIDM1Ljg1NTQ2OSAzOS42MDE1NjIgMzYuMzMyMDMxIDQwLjI4MTI1IDM2LjI3MzQzOCA0MS4xNzk2ODggQyAzNS45MzM1OTQgNDYuODEyNSAzNC4yMTg3NSA1MS43NzczNDQgMjkuODMyMDMxIDU1LjM4NjcxOSBDIDI5LjM4MjgxMiA1NS43NjU2MjUgMjguODg2NzE5IDU2LjA5Mzc1IDI4LjM2NzE4OCA1Ni4zNzEwOTQgQyAyNi40MTQwNjIgNTcuNDQxNDA2IDI1LjQxNDA2MiA1Ny4yNjk1MzEgMjMuODUxNTYyIDU1LjY2NDA2MiBDIDIzLjYwOTM3NSA1NS40MjU3ODEgMjMuMzkwNjI1IDU1LjE0NDUzMSAyMy4xMjEwOTQgNTQuOTU3MDMxIEMgMjEuNzU3ODEyIDU0IDIxLjI2NTYyNSA1Mi42MzI4MTIgMjEuMzk4NDM4IDUxLjMyODEyNSAiIGNsaXAtcnVsZT0ibm9uemVybyIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSI1ZmI0ZWE4YzI2Ij48cGF0aCBkPSJNIDEwLjUzNTE1NiAzNi44NDM3NSBMIDI0LjQxMDE1NiAzNi44NDM3NSBMIDI0LjQxMDE1NiA1Ni44ODY3MTkgTCAxMC41MzUxNTYgNTYuODg2NzE5IFogTSAxMC41MzUxNTYgMzYuODQzNzUgIiBjbGlwLXJ1bGU9Im5vbnplcm8iLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iZGY5Y2RlMzk2OSI+PHBhdGggZD0iTSAxNi43NjE3MTkgNDEuMTA5Mzc1IEMgMTcuMTQwNjI1IDQwLjYwOTM3NSAxNy40Njg3NSA0MC4wNTA3ODEgMTcuODk4NDM4IDM5LjYxMzI4MSBDIDE5LjE4MzU5NCAzOC4yOTY4NzUgMjAuNjk5MjE5IDM3LjQzNzUgMjIuNTQyOTY5IDM3LjM5MDYyNSBDIDIyLjg5NDUzMSAzNy4zNzg5MDYgMjMuMjgxMjUgMzcuNDE3OTY5IDIzLjU4OTg0NCAzNy41NzAzMTIgQyAyNC40MTAxNTYgMzcuOTg4MjgxIDI0LjQ3NjU2MiAzOC41NTQ2ODggMjMuODAwNzgxIDM5LjE4MzU5NCBDIDIzLjI0MjE4OCAzOS43MDMxMjUgMjIuNjY0MDYyIDQwLjIxMDkzOCAyMi4wNjY0MDYgNDAuNjc5Njg4IEMgMTguNDI1NzgxIDQzLjU3MDMxMiAxNi4zMTI1IDQ3LjQyOTY4OCAxNS40MTQwNjIgNTIuMDY2NDA2IEMgMTUuMjI2NTYyIDUzLjA1MDc4MSAxNS4xMjUgNTQuMDcwMzEyIDE1LjAzNTE1NiA1NS4wNzgxMjUgQyAxNC45MjU3ODEgNTYuMzk0NTMxIDE0LjMwODU5NCA1Ni45NDkyMTkgMTMuMDYyNSA1Ni43NzM0MzggQyAxMS43MjY1NjIgNTYuNTgyMDMxIDEwLjkyOTY4OCA1NS40OTYwOTQgMTAuNzU3ODEyIDUzLjg5ODQzOCBDIDEwLjMwMDc4MSA0OS41NDI5NjkgMTAuNzc3MzQ0IDQ1LjI3NzM0NCAxMS44MDQ2ODggNDEuMDQ2ODc1IEMgMTIuMDAzOTA2IDQwLjIzMDQ2OSAxMi4xMjUgMzkuMzk0NTMxIDEyLjM3NSAzOC42MDU0NjkgQyAxMi43NzM0MzggMzcuMzIwMzEyIDEzLjM3MTA5NCAzNi43ODkwNjIgMTQuMTY3OTY5IDM2Ljg3MTA5NCBDIDE1LjA2NjQwNiAzNi45NjA5MzggMTUuOTQxNDA2IDM3Ljk3NjU2MiAxNi4xMDE1NjIgMzkuMDkzNzUgQyAxNi4xODM1OTQgMzkuNjkxNDA2IDE2LjMwMDc4MSA0MC4yODkwNjIgMTYuNDEwMTU2IDQwLjg4NjcxOSBDIDE2LjUzMTI1IDQwLjk1NzAzMSAxNi42NDA2MjUgNDEuMDM5MDYyIDE2Ljc2MTcxOSA0MS4xMDkzNzUgIiBjbGlwLXJ1bGU9Im5vbnplcm8iLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjYTkwNTAyMjM5NykiPjxnIGNsaXAtcGF0aD0idXJsKCM2NjgxZmQxZjQ3KSI+PHBhdGggZmlsbD0iI2ZlOGEwMCIgZD0iTSA1LjYwNTQ2OSAyMi42NjQwNjIgTCA3OS4xMzY3MTkgMjIuNjY0MDYyIEwgNzkuMTM2NzE5IDYyLjEyNSBMIDUuNjA1NDY5IDYyLjEyNSBaIE0gNS42MDU0NjkgMjIuNjY0MDYyICIgZmlsbC1vcGFjaXR5PSIxIiBmaWxsLXJ1bGU9Im5vbnplcm8iLz48L2c+PC9nPjxnIGNsaXAtcGF0aD0idXJsKCMyODlhZWJhNWY0KSI+PGcgY2xpcC1wYXRoPSJ1cmwoIzM2ODIwZWRiMjEpIj48cGF0aCBmaWxsPSIjZmU4YTAwIiBkPSJNIDUuNjA1NDY5IDIyLjY2NDA2MiBMIDc5LjEzNjcxOSAyMi42NjQwNjIgTCA3OS4xMzY3MTkgNjIuMTI1IEwgNS42MDU0NjkgNjIuMTI1IFogTSA1LjYwNTQ2OSAyMi42NjQwNjIgIiBmaWxsLW9wYWNpdHk9IjEiIGZpbGwtcnVsZT0ibm9uemVybyIvPjwvZz48L2c+PGcgY2xpcC1wYXRoPSJ1cmwoI2FlNDIyYjFjOTMpIj48ZyBjbGlwLXBhdGg9InVybCgjMzY1MzlhN2Y0NSkiPjxwYXRoIGZpbGw9IiNmZThhMDAiIGQ9Ik0gNS42MDU0NjkgMjIuNjY0MDYyIEwgNzkuMTM2NzE5IDIyLjY2NDA2MiBMIDc5LjEzNjcxOSA2Mi4xMjUgTCA1LjYwNTQ2OSA2Mi4xMjUgWiBNIDUuNjA1NDY5IDIyLjY2NDA2MiAiIGZpbGwtb3BhY2l0eT0iMSIgZmlsbC1ydWxlPSJub256ZXJvIi8+PC9nPjwvZz48ZyBjbGlwLXBhdGg9InVybCgjNWZiNGVhOGMyNikiPjxnIGNsaXAtcGF0aD0idXJsKCNkZjljZGUzOTY5KSI+PHBhdGggZmlsbD0iI2ZlOGEwMCIgZD0iTSA1LjYwNTQ2OSAyMi42NjQwNjIgTCA3OS4xMzY3MTkgMjIuNjY0MDYyIEwgNzkuMTM2NzE5IDYyLjEyNSBMIDUuNjA1NDY5IDYyLjEyNSBaIE0gNS42MDU0NjkgMjIuNjY0MDYyICIgZmlsbC1vcGFjaXR5PSIxIiBmaWxsLXJ1bGU9Im5vbnplcm8iLz48L2c+PC9nPjwvc3ZnPg==";
 
@@ -2436,6 +2642,7 @@ export default function App() {
     ["---","","Passo a passo do repasse",["master","admin"]],
     ["historico","⏱","Histórico de Período",["master","admin","usuario","view"]],
     ["pdvs","⊞","Cadastro PDVs",["master","admin"]],
+    ["conferencia","📋","Conferência PDVs",["master","admin"]],
     ["entrada","⇥","Entrada dados",["master","admin"]],
     ["calcular","≡","Calcular",["master","admin"]],
     ["demo","☷","Demonstrativo",["master","admin","usuario"]],
@@ -2510,6 +2717,7 @@ export default function App() {
           </div>}
         </>}
         {page==="pdvs"&&<PdvManager pdvs={pdvs} setPdvs={setPdvs} save={savePdvsToSB}/>}
+        {page==="conferencia"&&<Conferencia pdvs={pdvs} userRole={userRole}/>}
         {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB}/>}
         {page==="calcular"&&<CalcResults pdvs={pdvs} md={md} results={results} setResults={setResults} save={saveResultsToSB} period={period}/>}
         {page==="demo"&&<Demonstrativo pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
