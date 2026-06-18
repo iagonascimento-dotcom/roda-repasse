@@ -2015,6 +2015,12 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
       <div><span className="stat-lbl">PDVs</span><div style={{fontWeight:700,fontSize:14}}>{typePdvs.length}</div></div>
       <div style={{borderLeft:"1px solid var(--color-border-tertiary)",height:36}}/>
       <div><span className="stat-lbl">Total repasse</span><div className="mono" style={{fontWeight:700,fontSize:16,color:"var(--accent)"}}>{fmt(totalRepasse)}</div></div>
+      {(()=>{
+        const probCount=rows.filter(r=>r.total<0||(hasMeter&&(!(r.ms>0)||!(r.me>0)||(r.ms>0&&r.me>0&&r.me<r.ms)))).length;
+        if(probCount===0)return null;
+        return <><div style={{borderLeft:"1px solid var(--color-border-tertiary)",height:36}}/>
+          <div><span className="stat-lbl">⚠ Alertas</span><div style={{fontWeight:700,fontSize:16,color:"#991b1b"}}>{probCount} PDV(s)</div></div></>;
+      })()}
     </div>
     {typePdvs.length>0?<div className="card" style={{padding:0,overflow:"hidden"}}><div className="scroll-x"><table>
       <thead><tr><th>ID</th><th>Nome do PDV</th>
@@ -2027,12 +2033,25 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
         {hasOU&&<th>Vencedor</th>}
         <th>Subtotal</th><th style={editMode?{background:"#fffbe6"}:{}}>Ajuste{editMode&&" ✎"}</th>
         <th style={{background:"var(--accent-bg)"}}>Total</th></tr></thead>
-      <tbody>{rows.map(r=><tr key={r.pid}>
+      <tbody>{rows.map(r=>{
+        // Alerta de problema: total negativo, ou (em contratos com medidor) medidor
+        // início/fim ausente ou invertido (fim < início → energia negativa).
+        const problems=[];
+        if(r.total<0)problems.push("Total negativo");
+        if(hasMeter){
+          if(!(r.ms>0))problems.push("Sem medidor início");
+          if(!(r.me>0))problems.push("Sem medidor fim");
+          if(r.ms>0&&r.me>0&&r.me<r.ms)problems.push("Medidor fim < início");
+        }
+        const hasProblem=problems.length>0;
+        const rowStyle=editMode?{}:(hasProblem?{background:"#fef2f2"}:{});
+        return <tr key={r.pid} style={rowStyle} title={hasProblem?("⚠ "+problems.join(" • ")):undefined}>
         <td className="mono" style={{fontSize:11}}>{r.pid}</td>
-        <td className="trunc" style={{fontWeight:500,minWidth:180}}>{r.p.name}</td>
+        <td className="trunc" style={{fontWeight:500,minWidth:180,...(hasProblem&&!editMode?{color:"#991b1b",fontWeight:700}:{})}}>
+          {hasProblem&&!editMode&&<span title={problems.join(" • ")} style={{marginRight:5}}>⚠</span>}{r.p.name}</td>
         {hasMin&&<td className="mono">{editMode?ec(r.pid,"minimal_repass",r.mn,false,80):fmt(r.mn)}</td>}
-        {hasMeter&&<><td className="mono">{editMode?ec(r.pid,"meter_start",r.ms,true,80):(r.ms||"-")}</td>
-          <td className="mono">{editMode?ec(r.pid,"meter_end",r.me,true,80):(r.me||"-")}</td>
+        {hasMeter&&<><td className="mono" style={!editMode&&!(r.ms>0)?{background:"#fee2e2",color:"#991b1b",fontWeight:700}:{}}>{editMode?ec(r.pid,"meter_start",r.ms,true,80):(r.ms||"-")}</td>
+          <td className="mono" style={!editMode&&(!(r.me>0)||(r.ms>0&&r.me<r.ms))?{background:"#fee2e2",color:"#991b1b",fontWeight:700}:{}}>{editMode?ec(r.pid,"meter_end",r.me,true,80):(r.me||"-")}</td>
           <td className="mono">{editMode?ec(r.pid,"kwh_unity_price",r.kwh,false,60):r.kwh}</td>
           <td className="mono" style={(()=>{const v=Number(r.eb)||0;if(v>1500)return {fontWeight:700,background:"#fee2e2",color:"#991b1b"};if(v>0&&v<200)return {fontWeight:600,background:"#fef3c7",color:"#92400e"};return {fontWeight:600,color:v>0?"inherit":"var(--color-text-tertiary)"};})()}>{r.eb>0?fmt(r.eb):"-"}</td></>}
         {hasRev&&<><td className="mono">{editMode?ec(r.pid,"raw_revenue",r.raw,true,90):(r.raw>0?fmt(r.raw):"-")}</td>
@@ -2044,8 +2063,8 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
         {hasOU&&<td><span className={`badge ${r.winner==="Energia"?"badge-warn":r.winner==="%Fat"?"badge-info":"badge-ok"}`}>{r.winner}</span></td>}
         <td className="mono" style={{fontWeight:600}}>{fmt(r.sub)}</td>
         <td className="mono">{editMode?ec(r.pid,"manual_adjustment",r.adj,true,80):<span style={{color:r.adj!==0?"var(--warn)":"var(--color-text-tertiary)"}}>{r.adj!==0?fmt(r.adj):"-"}</span>}</td>
-        <td className="mono" style={{fontWeight:700,background:"var(--accent-bg)",color:"var(--accent)"}}>{fmt(r.total)}</td>
-      </tr>)}
+        <td className="mono" style={{fontWeight:700,background:r.total<0?"#fee2e2":"var(--accent-bg)",color:r.total<0?"#991b1b":"var(--accent)"}}>{fmt(r.total)}</td>
+      </tr>;})}
       <tr style={{fontWeight:700,borderTop:"2px solid var(--color-border-secondary)"}}>
         <td colSpan={2} style={{textAlign:"right",paddingRight:12}}>TOTAL</td>
         {hasMin&&<td className="mono">{fmt(rows.reduce((s,r)=>s+r.mn,0))}</td>}
