@@ -2307,14 +2307,52 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
     try{
       const f={};
       if(aFilter.email)f.email=aFilter.email;
-      if(aFilter.acao)f.acao=aFilter.acao;
+      // "__bancario__" é um filtro derivado: busca edições de cadastro e filtra por campo bancário.
+      if(aFilter.acao&&aFilter.acao!=="__bancario__")f.acao=aFilter.acao;
+      if(aFilter.acao==="__bancario__")f.acao="Editou cadastro PDV";
       if(aFilter.from)f.from=new Date(aFilter.from+"T00:00:00").toISOString();
       if(aFilter.to)f.to=new Date(aFilter.to+"T23:59:59").toISOString();
       if(aFilter.search)f.search=aFilter.search;
-      const rows=await SB.loadAuditLog(f);
+      let rows=await SB.loadAuditLog(f);
+      if(aFilter.acao==="__bancario__"){
+        const bankFields=["Banco","Agência","Conta","PIX","CNPJ","CNPJ cond","Nome conta"];
+        rows=(rows||[]).filter(r=>bankFields.includes(r.campo));
+      }
       setAuditRows(rows||[]);
     }catch(e){console.error(e);alert("Erro ao carregar histórico: "+e.message);}
     setAuditLoading(false);
+  }
+
+  // Exporta o histórico atualmente carregado (respeita o filtro aplicado) para Excel.
+  function exportAudit(){
+    if(!auditRows.length){alert("Nada para exportar. Faça uma busca primeiro.");return;}
+    const isBank=aFilter.acao==="__bancario__";
+    const header=isBank
+      ? ["Data/Hora","Usuário","Email","PDV","Campo","Valor anterior","Valor novo"]
+      : ["Data/Hora","Usuário","Email","Ação","Item","Campo","Valor anterior","Valor novo","Período","Descrição"];
+    const data=[header];
+    auditRows.forEach(r=>{
+      const dt=new Date(r.created_at).toLocaleString("pt-BR");
+      if(isBank){
+        data.push([dt,r.user_nome||"",r.user_email||"",r.entidade_nome||"",r.campo||"",
+          r.valor_antigo??"",r.valor_novo??""]);
+      }else{
+        data.push([dt,r.user_nome||"",r.user_email||"",r.acao||"",r.entidade_nome||"",r.campo||"",
+          r.valor_antigo??"",r.valor_novo??"",r.periodo_nome||"",r.descricao||""]);
+      }
+    });
+    const ws=XLSX.utils.aoa_to_sheet(data);
+    ws['!cols']=isBank
+      ? [{wch:20},{wch:22},{wch:30},{wch:36},{wch:14},{wch:22},{wch:22}]
+      : [{wch:20},{wch:22},{wch:30},{wch:22},{wch:36},{wch:16},{wch:20},{wch:20},{wch:16},{wch:40}];
+    ws['!freeze']={xSplit:0,ySplit:1};
+    const wb=XLSX.utils.book_new();
+    const sheetName=isBank?"Alteracoes Bancarias":"Historico de Edicoes";
+    XLSX.utils.book_append_sheet(wb,ws,sheetName);
+    const today=new Date();
+    const dateStr=`${String(today.getDate()).padStart(2,"0")}-${String(today.getMonth()+1).padStart(2,"0")}-${today.getFullYear()}`;
+    const prefix=isBank?"dados_bancarios":"historico_edicoes";
+    XLSX.writeFile(wb,`${prefix}_${dateStr}.xlsx`);
   }
   useEffect(()=>{if(tab==="audit"&&auditRows.length===0)loadAudit();},[tab]);
 
@@ -2429,6 +2467,7 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
             <select value={aFilter.acao} onChange={e=>setAFilter({...aFilter,acao:e.target.value})}
               style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,minWidth:160}}>
               <option value="">Todas</option>
+              <option value="__bancario__">💳 Alteração de Dados Bancários</option>
               <option>Editou cadastro PDV</option><option>Editou dados mensais</option>
               <option>Importou dados mensais</option><option>Calculou repasse</option>
               <option>Criou período</option><option>Excluiu período</option><option>Fechou período</option>
@@ -2446,10 +2485,11 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
               style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,minWidth:140}}/></div>
           <button className="btn btn-p" onClick={loadAudit} disabled={auditLoading}>{auditLoading?"Buscando...":"🔍 Buscar"}</button>
           <button className="btn btn-s" onClick={()=>{setAFilter({email:"",acao:"",from:"",to:"",search:""});}}>Limpar</button>
+          <button className="btn btn-o" onClick={exportAudit} disabled={auditLoading||auditRows.length===0}>⬇ Exportar Excel</button>
         </div>
       </div>
       <div className="card">
-        <div className="h3">Histórico de edições ({auditRows.length})</div>
+        <div className="h3">{aFilter.acao==="__bancario__"?"💳 Alterações de Dados Bancários":"Histórico de edições"} ({auditRows.length})</div>
         {auditLoading?<div className="empty">Carregando...</div>:
           auditRows.length===0?<div className="empty">Nenhum registro encontrado</div>:
           <div className="scroll-x"><table>
