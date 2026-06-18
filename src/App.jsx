@@ -871,6 +871,61 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="comparativo_periodos.csv";a.click();
   }
 
+  /* ─── Relatórios rápidos (seção nova) ─── */
+  const [repDay,setRepDay]=useState("todos"); // "todos" | "20" | "3"
+  // Filtro de dia de pagamento aplicado ao conjunto de resultados do período ativo.
+  function passDay(pdvId){
+    if(repDay==="todos")return true;
+    return String(pdvPayDay[pdvId]||20)===repDay;
+  }
+  // Base: resultados do período ativo, enriquecidos com dados do PDV.
+  const repBase=(results||[]).map(r=>{
+    const p=pdvs.find(x=>x.id===r.id)||{};
+    return {...r, name:r.name||p.name||"", contract_type:r.contract_type||p.contract_type||"",
+      revenue_consideration:p.revenue_consideration||r.revenue_consideration||"",
+      payment_day:pdvPayDay[r.id]||p.payment_day||20,
+      minimal_repass:p.minimal_repass||0, negotiated_percentage:p.negotiated_percentage||0,
+      kwh_unity_price:p.kwh_unity_price||0};
+  }).filter(r=>passDay(r.id)&&passesFilters(r.id));
+
+  // 1) Contas de luz acima de 1.000 OU contrato de Medidor
+  const energiaAlerta=repBase.filter(r=>{
+    const ct=r.contract_type||"";
+    const isMedidor=ct.includes("Medidor");
+    return (r.energyBill||0)>1000 || isMedidor;
+  }).sort((a,b)=>(b.energyBill||0)-(a.energyBill||0));
+
+  // 2) PDVs com repasse considerado BRUTO
+  const brutoList=repBase.filter(r=>r.revenue_consideration==="Bruto")
+    .sort((a,b)=>(b.total||0)-(a.total||0));
+
+  // Exporta lista demonstrativa (mesmos campos do Demonstrativo) em Excel, respeitando dia/filtros.
+  function exportDemonstrativo(){
+    if(!repBase.length){alert("Nada para exportar neste período/filtro.");return;}
+    const header=["ID","Nome do PDV","Tipo de contrato","Tipo receita","Dia pagamento",
+      "Mínimo","kWh","Energia","Fat. cálculo","% negociado","Valor %","Subtotal","Ajuste","Total"];
+    const data=[header];
+    [...repBase].sort((a,b)=>(b.total||0)-(a.total||0)).forEach(r=>{
+      const adj=(r.total||0)-(r.subtotal||0);
+      data.push([r.id, r.name, r.contract_type, r.revenue_consideration, r.payment_day,
+        r.minimal_repass||0, r.kwh_unity_price||0, r.energyBill||0, r.calcRevenue||0,
+        (r.negotiated_percentage||0), r.pctRevenue||0, r.subtotal||0, adj, r.total||0]);
+    });
+    // Linha de total
+    data.push(["","","","","","","","","","","TOTAL",
+      repBase.reduce((s,r)=>s+(r.subtotal||0),0),
+      repBase.reduce((s,r)=>s+((r.total||0)-(r.subtotal||0)),0),
+      repBase.reduce((s,r)=>s+(r.total||0),0)]);
+    const ws=XLSX.utils.aoa_to_sheet(data);
+    ws['!cols']=[{wch:10},{wch:38},{wch:34},{wch:12},{wch:12},{wch:12},{wch:10},{wch:14},{wch:14},{wch:12},{wch:14},{wch:14},{wch:12},{wch:14}];
+    ws['!freeze']={xSplit:0,ySplit:1};
+    const wb=XLSX.utils.book_new();
+    const diaLabel=repDay==="todos"?"todos":("dia"+repDay);
+    XLSX.utils.book_append_sheet(wb,ws,"Demonstrativo");
+    const safePeriod=(period||"periodo").replace(/[^\w]+/g,"_");
+    XLSX.writeFile(wb,`demonstrativo_${safePeriod}_${diaLabel}.xlsx`);
+  }
+
   return <div className="fade-in">
     <div className="h2" style={{marginBottom:12}}>Dashboard</div>
     <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:8,flexWrap:"wrap"}}>
@@ -1076,6 +1131,68 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
       {selPeriods.length===0&&!loadingComp&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",textAlign:"center",padding:16}}>Selecione "De" e "Até" e clique em Comparar</div>}
       </>}
     </div>}
+
+    {/* ─── Relatórios rápidos ─── */}
+    <div className="card">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:6}}>
+        <div className="h3" style={{margin:0}}>📋 Relatórios rápidos — {period||"sem período"}</div>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)"}}>Dia de pagamento:</span>
+          {[["todos","Todos"],["20","Dia 20"],["3","Dia 03"]].map(([k,l])=>
+            <button key={k} className={repDay===k?"btn btn-p":"btn btn-s"} style={{fontSize:12,padding:"5px 12px"}}
+              onClick={()=>setRepDay(k)}>{l}</button>)}
+          {canExport&&<button className="btn btn-o" style={{fontSize:12,padding:"5px 12px"}} onClick={exportDemonstrativo}>⬇ Exportar Demonstrativo</button>}
+        </div>
+      </div>
+      <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:14}}>
+        Baseado nos resultados calculados do período ativo. O filtro de dia e os filtros do topo (tipo/receita/busca) também se aplicam aqui.
+      </div>
+
+      <div className="grid2" style={{alignItems:"start"}}>
+        {/* 1) Contas de luz > 1000 ou Medidor */}
+        <div>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:8,display:"flex",justifyContent:"space-between"}}>
+            <span>⚡ Energia acima de R$1.000 ou contrato Medidor</span>
+            <span style={{color:"var(--color-text-tertiary)"}}>{energiaAlerta.length}</span>
+          </div>
+          {energiaAlerta.length===0?<div className="empty" style={{fontSize:12}}>Nenhum PDV neste critério.</div>:
+          <div className="scroll-x" style={{maxHeight:320,overflowY:"auto"}}><table>
+            <thead><tr><th>PDV</th><th>Tipo</th><th style={{textAlign:"right"}}>Energia</th><th style={{textAlign:"right"}}>Total</th></tr></thead>
+            <tbody>{energiaAlerta.map(r=>
+              <tr key={r.id}>
+                <td className="trunc" style={{fontWeight:500,maxWidth:180}}>{r.name}</td>
+                <td style={{fontSize:11,color:"var(--color-text-secondary)"}}>{r.contract_type?.includes("Medidor")?"Medidor":"—"}</td>
+                <td className="mono" style={{textAlign:"right",fontWeight:600,color:(r.energyBill||0)>1000?"#991b1b":"inherit"}}>{(r.energyBill||0)>0?fmt(r.energyBill):"-"}</td>
+                <td className="mono" style={{textAlign:"right",fontWeight:600}}>{fmt(r.total)}</td>
+              </tr>)}
+            </tbody>
+          </table></div>}
+        </div>
+
+        {/* 2) Repasse BRUTO */}
+        <div>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:8,display:"flex",justifyContent:"space-between"}}>
+            <span>💰 PDVs com repasse BRUTO</span>
+            <span style={{color:"var(--color-text-tertiary)"}}>{brutoList.length}</span>
+          </div>
+          {brutoList.length===0?<div className="empty" style={{fontSize:12}}>Nenhum PDV com receita Bruto.</div>:
+          <div className="scroll-x" style={{maxHeight:320,overflowY:"auto"}}><table>
+            <thead><tr><th>PDV</th><th>Tipo</th><th style={{textAlign:"right"}}>Total</th></tr></thead>
+            <tbody>{brutoList.map(r=>
+              <tr key={r.id}>
+                <td className="trunc" style={{fontWeight:500,maxWidth:200}}>{r.name}</td>
+                <td style={{fontSize:11,color:"var(--color-text-secondary)"}} className="trunc">{r.contract_type}</td>
+                <td className="mono" style={{textAlign:"right",fontWeight:600}}>{fmt(r.total)}</td>
+              </tr>)}
+              <tr style={{fontWeight:700,borderTop:"2px solid var(--color-border-secondary)"}}>
+                <td colSpan={2} style={{textAlign:"right"}}>TOTAL</td>
+                <td className="mono" style={{textAlign:"right",color:"var(--accent)"}}>{fmt(brutoList.reduce((s,r)=>s+(r.total||0),0))}</td>
+              </tr>
+            </tbody>
+          </table></div>}
+        </div>
+      </div>
+    </div>
   </div>;
 }
 
@@ -2333,6 +2450,21 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
          campo:req.campo,valor_antigo:req.valor_atual,valor_novo:req.valor_novo,
          periodo_nome:req.periodo_nome||"",
          descricao:`Solicitado por ${req.requester_nome||req.requester_email}${req.justificativa?` — Justificativa: "${req.justificativa}"`:""}`});
+      // Se aprovou um cadastro novo, registra também um "Criou PDV" com todos os campos,
+      // para aparecer no filtro/export de Novos PDVs (mesmo formato da criação direta).
+      if(status==="aprovado"&&req.tipo==="pdv_create"&&req.payload){
+        const pl=req.payload;
+        const det=[
+          `VMpay ID: ${pl.id||"(sem ID)"}`,`Tipo: ${pl.contract_type||"-"}`,
+          `Receita: ${pl.revenue_consideration||"-"}`,`% negociado: ${pl.negotiated_percentage||0}`,
+          `Preço kWh: ${pl.kwh_unity_price||0}`,`Mínimo: ${pl.minimal_repass||0}`,
+          `Dia pgto: ${pl.payment_day||20}`,`Banco: ${pl.bank_banco||"-"}`,
+          `Agência: ${pl.bank_agencia||"-"}`,`Conta: ${pl.bank_conta||"-"}`,
+          `PIX: ${pl.bank_pix||"-"}`,`CNPJ: ${pl.bank_cnpj||"-"}`,`Nome conta: ${pl.bank_name||"-"}`,
+          `Solicitado por: ${req.requester_nome||req.requester_email}`
+        ].join(" | ");
+        audit("Criou PDV",{entidade:"PDV",entidade_nome:req.pdv_nome||pl.name,descricao:det});
+      }
       if(status==="aprovado"&&onApproved) await onApproved();
       await load();
     }catch(e){alert("Erro: "+e.message);}
@@ -2343,9 +2475,12 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
     try{
       const f={};
       if(aFilter.email)f.email=aFilter.email;
-      // "__bancario__" é um filtro derivado: busca edições de cadastro e filtra por campo bancário.
-      if(aFilter.acao&&aFilter.acao!=="__bancario__")f.acao=aFilter.acao;
+      // Filtros derivados especiais:
+      // "__bancario__" → edições de cadastro, filtradas por campo bancário.
+      // "__novospdvs__" → ação "Criou PDV" (cadastros novos, com todos os campos na descrição).
+      if(aFilter.acao&&!aFilter.acao.startsWith("__"))f.acao=aFilter.acao;
       if(aFilter.acao==="__bancario__")f.acao="Editou cadastro PDV";
+      if(aFilter.acao==="__novospdvs__")f.acao="Criou PDV";
       if(aFilter.from)f.from=new Date(aFilter.from+"T00:00:00").toISOString();
       if(aFilter.to)f.to=new Date(aFilter.to+"T23:59:59").toISOString();
       if(aFilter.search)f.search=aFilter.search;
@@ -2363,6 +2498,32 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
   function exportAudit(){
     if(!auditRows.length){alert("Nada para exportar. Faça uma busca primeiro.");return;}
     const isBank=aFilter.acao==="__bancario__";
+    const isNovos=aFilter.acao==="__novospdvs__";
+    const today=new Date();
+    const dateStr=`${String(today.getDate()).padStart(2,"0")}-${String(today.getMonth()+1).padStart(2,"0")}-${today.getFullYear()}`;
+
+    if(isNovos){
+      // Quebra a descrição "Campo: valor | Campo: valor" em colunas.
+      const cols=["VMpay ID","Tipo","Receita","% negociado","Preço kWh","Mínimo","Dia pgto","Banco","Agência","Conta","PIX","CNPJ","Nome conta","Solicitado por"];
+      const header=["Data/Hora","PDV","Cadastrado por",...cols];
+      const data=[header];
+      auditRows.forEach(r=>{
+        const dt=new Date(r.created_at).toLocaleString("pt-BR");
+        const parts={};(r.descricao||"").split("|").forEach(seg=>{
+          const i=seg.indexOf(":");if(i>0){parts[seg.slice(0,i).trim()]=seg.slice(i+1).trim();}
+        });
+        data.push([dt,r.entidade_nome||"",r.user_nome||r.user_email||"",
+          ...cols.map(c=>parts[c]??"")]);
+      });
+      const ws=XLSX.utils.aoa_to_sheet(data);
+      ws['!cols']=[{wch:20},{wch:36},{wch:24},{wch:12},{wch:30},{wch:12},{wch:12},{wch:10},{wch:10},{wch:10},{wch:18},{wch:18},{wch:24},{wch:22},{wch:24},{wch:24}];
+      ws['!freeze']={xSplit:0,ySplit:1};
+      const wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,"Novos PDVs");
+      XLSX.writeFile(wb,`novos_pdvs_${dateStr}.xlsx`);
+      return;
+    }
+
     const header=isBank
       ? ["Data/Hora","Usuário","Email","PDV","Campo","Valor anterior","Valor novo"]
       : ["Data/Hora","Usuário","Email","Ação","Item","Campo","Valor anterior","Valor novo","Período","Descrição"];
@@ -2385,8 +2546,6 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
     const wb=XLSX.utils.book_new();
     const sheetName=isBank?"Alteracoes Bancarias":"Historico de Edicoes";
     XLSX.utils.book_append_sheet(wb,ws,sheetName);
-    const today=new Date();
-    const dateStr=`${String(today.getDate()).padStart(2,"0")}-${String(today.getMonth()+1).padStart(2,"0")}-${today.getFullYear()}`;
     const prefix=isBank?"dados_bancarios":"historico_edicoes";
     XLSX.writeFile(wb,`${prefix}_${dateStr}.xlsx`);
   }
@@ -2503,6 +2662,7 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
             <select value={aFilter.acao} onChange={e=>setAFilter({...aFilter,acao:e.target.value})}
               style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)",fontSize:13,minWidth:160}}>
               <option value="">Todas</option>
+              <option value="__novospdvs__">➕ Novos PDVs (cadastros)</option>
               <option value="__bancario__">💳 Alteração de Dados Bancários</option>
               <option>Editou cadastro PDV</option><option>Editou dados mensais</option>
               <option>Importou dados mensais</option><option>Calculou repasse</option>
@@ -2525,7 +2685,7 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
         </div>
       </div>
       <div className="card">
-        <div className="h3">{aFilter.acao==="__bancario__"?"💳 Alterações de Dados Bancários":"Histórico de edições"} ({auditRows.length})</div>
+        <div className="h3">{aFilter.acao==="__bancario__"?"💳 Alterações de Dados Bancários":aFilter.acao==="__novospdvs__"?"➕ Novos PDVs cadastrados":"Histórico de edições"} ({auditRows.length})</div>
         {auditLoading?<div className="empty">Carregando...</div>:
           auditRows.length===0?<div className="empty">Nenhum registro encontrado</div>:
           <div className="scroll-x"><table>
@@ -3048,8 +3208,23 @@ export default function App() {
         // NEW PDV - INSERT into database
         try{
           await SB.createPdv(np);
-          audit("Criou PDV",{entidade:"PDV",entidade_nome:np.name,
-            descricao:`VMpay ID: ${np.id||"(sem ID)"}, Tipo: ${np.contract_type}`});
+          // Registra TODOS os campos lançados no novo PDV (para o filtro/export "Novos PDVs").
+          const det=[
+            `VMpay ID: ${np.id||"(sem ID)"}`,
+            `Tipo: ${np.contract_type||"-"}`,
+            `Receita: ${np.revenue_consideration||"-"}`,
+            `% negociado: ${np.negotiated_percentage||0}`,
+            `Preço kWh: ${np.kwh_unity_price||0}`,
+            `Mínimo: ${np.minimal_repass||0}`,
+            `Dia pgto: ${np.payment_day||20}`,
+            `Banco: ${np.bank_banco||"-"}`,
+            `Agência: ${np.bank_agencia||"-"}`,
+            `Conta: ${np.bank_conta||"-"}`,
+            `PIX: ${np.bank_pix||"-"}`,
+            `CNPJ: ${np.bank_cnpj||"-"}`,
+            `Nome conta: ${np.bank_name||"-"}`
+          ].join(" | ");
+          audit("Criou PDV",{entidade:"PDV",entidade_nome:np.name,descricao:det});
           needsReload=true;
         }catch(e){
           console.error("Create PDV error:",e);
