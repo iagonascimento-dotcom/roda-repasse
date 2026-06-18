@@ -1518,6 +1518,7 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
   const [confirm,setConfirm]=useState(null);
   const [justify,setJustify]=useState(null);
   const [filter,setFilter]=useState("all");
+  const [lastSave,setLastSave]=useState("");
 
   const changeCount=Object.values(pdvEdits).reduce((s,e)=>s+Object.keys(e).length,0)
     +Object.values(mdEdits).reduce((s,e)=>s+Object.keys(e).length,0);
@@ -1622,7 +1623,7 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
         onConfirm:()=>{
           if(Object.keys(pdvEdits).length){const np=pdvs.map(p=>pdvEdits[p.id]?{...p,...pdvEdits[p.id]}:p);setPdvs(np);savePdvs(np);}
           if(Object.keys(mdEdits).length){const nm={...md};Object.entries(mdEdits).forEach(([pid,d])=>{nm[pid]={...(nm[pid]||{}),...d};});setMd(nm);saveMd(nm);}
-          setConfirm(null);setEditMode(false);setPdvEdits({});setMdEdits({});
+          setLastSave(new Date().toLocaleTimeString("pt-BR"));setConfirm(null);setEditMode(false);setPdvEdits({});setMdEdits({});
         }
       });
     }
@@ -1637,8 +1638,9 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
       <div className="h2">Pendências</div>
       <div style={{display:"flex",gap:8,alignItems:"center"}}>
         {editMode&&changeCount>0&&<span style={{fontSize:11,color:"var(--warn)",fontWeight:600}}>{changeCount} alteração(ões)</span>}
+        {!editMode&&lastSave&&<span style={{fontSize:11,color:"#3d7a00",fontWeight:500}}>✓ Salvo às {lastSave}</span>}
         {editMode?<>
-          <button className="btn btn-p" onClick={requestSave}>{isUsuario?"📩 Enviar solicitação":"✓ Salvar na base"}</button>
+          <button className="btn btn-p" onClick={requestSave}>{isUsuario?"📩 Enviar solicitação":"💾 Salvar no banco"}</button>
           <button className="btn btn-s" onClick={()=>{setEditMode(false);setPdvEdits({});setMdEdits({});}}>✕ Cancelar</button>
         </>:(isUsuario&&isLocked)?<span style={{fontSize:11,color:"var(--color-text-tertiary)",fontStyle:"italic",padding:"6px 10px",border:"1px dashed var(--color-border-tertiary)",borderRadius:6}}>🔒 Período já entregue — alterações bloqueadas</span>
         :<button className="btn btn-s" onClick={()=>setEditMode(true)} style={{border:"1.5px dashed var(--accent)",color:"var(--accent)"}}>{isUsuario?"📩 Solicitar alteração":"✎ Corrigir pendências"}</button>}
@@ -1817,6 +1819,7 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
   const [confirm,setConfirm]=useState(null);
   const [justify,setJustify]=useState(null);
   const [changeCount,setChangeCount]=useState(0);
+  const [lastSave,setLastSave]=useState("");
   useEffect(()=>{if(onDirty)onDirty(editMode?changeCount:0);},[changeCount,editMode]);
 
   const typePdvs=pdvs.filter(p=>p.contract_type===selType);
@@ -1868,7 +1871,7 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
       setConfirm({msg:`${changes.length} PDV(s) serão alterados:`,detail:changes.join("\n"),onConfirm:()=>{
         const newMdAll={...md};Object.entries(localMd).forEach(([pid,data])=>{newMdAll[pid]={...(newMdAll[pid]||{}),...data};});setMd(newMdAll);saveMd(newMdAll);
         if(Object.keys(localPdvEdits).length>0){const np=pdvs.map(p=>{const e=localPdvEdits[p.id];return e?{...p,...e}:p;});setPdvs(np);savePdvs(np);}
-        setConfirm(null);setEditMode(false);setChangeCount(0);}});
+        setLastSave(new Date().toLocaleTimeString("pt-BR"));setConfirm(null);setEditMode(false);setChangeCount(0);}});
     }
   }
 
@@ -1911,7 +1914,8 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
       <div className="h2">Demonstrativo por tipo</div>
       <div style={{display:"flex",gap:8,alignItems:"center"}}>
         {editMode&&changeCount>0&&<span style={{fontSize:11,color:"var(--warn)",fontWeight:600}}>{changeCount} alteração(ões)</span>}
-        {editMode?<><button className="btn btn-p" onClick={requestSave}>{isUsuario?"📩 Enviar solicitação":"✓ Salvar"}</button>
+        {!editMode&&lastSave&&<span style={{fontSize:11,color:"#3d7a00",fontWeight:500}}>✓ Salvo às {lastSave}</span>}
+        {editMode?<><button className="btn btn-p" onClick={requestSave}>{isUsuario?"📩 Enviar solicitação":"💾 Salvar no banco"}</button>
           <button className="btn btn-s" onClick={()=>{setEditMode(false);setChangeCount(0);}}>✕ Cancelar</button></>
           :(isUsuario&&isLocked)?<span style={{fontSize:11,color:"var(--color-text-tertiary)",fontStyle:"italic",padding:"6px 10px",border:"1px dashed var(--color-border-tertiary)",borderRadius:6}}>🔒 Período já entregue — alterações bloqueadas</span>
           :<button className="btn btn-s" onClick={()=>setEditMode(true)} style={{border:"1.5px dashed var(--accent)",color:"var(--accent)"}}>{isUsuario?"📩 Solicitar alteração":"✎ Editar valores"}</button>}
@@ -2709,6 +2713,30 @@ export default function App() {
   },[authed,authEmail]);
 
   /* ─── Save helpers ─── */
+  // Recalculates ALL results for a period using fresh pdvs/md and persists to Supabase.
+  // Called automatically after any md or pdv change so Calcular/Dashboard/Financeiro stay in sync.
+  async function recalcAndSaveResults(pdvsToUse, mdToUse, periodToUse){
+    if(!periodToUse?.id) return;
+    const list = (pdvsToUse||[]).filter(p=>p.contract_type!=="Boleto");
+    if(list.length===0) return;
+    const res = list.map(p=>{
+      const d = (mdToUse||{})[p.id] || {};
+      const r = calc(
+        {...p, manual_adjustment: d.manual_adjustment || p.manual_adjustment || 0},
+        d.meter_start||0, d.meter_end||0, d.raw_revenue||0, d.energy_bill_cond||0
+      );
+      return {...r, id:p.id, uuid:p.uuid, name:p.name, contract_type:p.contract_type,
+        revenue_consideration:p.revenue_consideration, payment_day:p.payment_day,
+        negotiated_percentage:p.negotiated_percentage};
+    });
+    setResults(res);
+    try{
+      const um = {}; (pdvsToUse||[]).forEach(p=>{if(p.uuid) um[p.id]=p.uuid;});
+      await SB.saveAllResults(periodToUse.id, res, um);
+      console.log(`[recalc] Resultados atualizados (${res.length} PDVs) — período ${periodToUse.nome}`);
+    }catch(e){console.error("[recalc] Erro ao salvar resultados:", e);}
+  }
+
   async function savePdvsToSB(newPdvs){
     setPdvs(newPdvs);
     const auditItems=[];
@@ -2772,7 +2800,12 @@ export default function App() {
         const um={},rm={};
         fresh.forEach(p=>{um[p.id]=p.uuid;rm[p.uuid]=p.id;});
         setUuidMap(um);setRevUuidMap(rm);
+        // After PDV reload, recalc with fresh data
+        await recalcAndSaveResults(fresh, md, activePeriod);
       }catch(e){console.error("Reload error:",e);}
+    } else {
+      // No reload needed but PDV fields may have changed — recalc with newPdvs
+      await recalcAndSaveResults(newPdvs, md, activePeriod);
     }
   }
 
@@ -2799,12 +2832,15 @@ export default function App() {
         }
       });
     }
-    if(records.length===0)return;
     try{
-      await SB.bulkUpsertMonthly(activePeriod.id,records);
-      console.log(`Saved ${records.length} monthly records to Supabase`);
-      if(auditItems.length>0&&auditItems.length<=50) auditBatch("Editou dados mensais",auditItems,activePeriod.nome);
-      else if(auditItems.length>50) audit("Importou dados mensais",{periodo_nome:activePeriod.nome,descricao:`${auditItems.length} campos atualizados em ${records.length} PDVs`});
+      if(records.length>0){
+        await SB.bulkUpsertMonthly(activePeriod.id,records);
+        console.log(`Saved ${records.length} monthly records to Supabase`);
+        if(auditItems.length>0&&auditItems.length<=50) auditBatch("Editou dados mensais",auditItems,activePeriod.nome);
+        else if(auditItems.length>50) audit("Importou dados mensais",{periodo_nome:activePeriod.nome,descricao:`${auditItems.length} campos atualizados em ${records.length} PDVs`});
+      }
+      // ALWAYS recalc after a save so Calcular/Dashboard/Financeiro stay in sync
+      await recalcAndSaveResults(pdvs, newMd, activePeriod);
     }catch(e){
       console.error("Bulk save error:",e);
       alert("Erro ao salvar no banco: "+e.message);
