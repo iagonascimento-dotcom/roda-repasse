@@ -1961,13 +1961,13 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
         {hasMeter&&<><td className="mono">{editMode?ec(r.pid,"meter_start",r.ms,true,80):(r.ms||"-")}</td>
           <td className="mono">{editMode?ec(r.pid,"meter_end",r.me,true,80):(r.me||"-")}</td>
           <td className="mono">{editMode?ec(r.pid,"kwh_unity_price",r.kwh,false,60):r.kwh}</td>
-          <td className="mono" style={{fontWeight:600,color:r.eb>0?"inherit":"var(--color-text-tertiary)"}}>{r.eb>0?fmt(r.eb):"-"}</td></>}
+          <td className="mono" style={(()=>{const v=Number(r.eb)||0;if(v>1500)return {fontWeight:700,background:"#fee2e2",color:"#991b1b"};if(v>0&&v<200)return {fontWeight:600,background:"#fef3c7",color:"#92400e"};return {fontWeight:600,color:v>0?"inherit":"var(--color-text-tertiary)"};})()}>{r.eb>0?fmt(r.eb):"-"}</td></>}
         {hasRev&&<><td className="mono">{editMode?ec(r.pid,"raw_revenue",r.raw,true,90):(r.raw>0?fmt(r.raw):"-")}</td>
           <td><span className={`badge ${r.revType==="Bruto"?"badge-warn":"badge-info"}`}>{r.revType}</span></td>
           <td className="mono">{r.cr>0?fmt(r.cr):"-"}</td>
           <td className="mono">{editMode?ec(r.pid,"negotiated_percentage",r.pct,false,60,true):`${(r.pct*100).toFixed(1)}%`}</td>
           <td className="mono" style={{fontWeight:600,color:r.pr>0?"inherit":"var(--color-text-tertiary)"}}>{r.pr>0?fmt(r.pr):"-"}</td></>}
-        {isEnergyConta&&<td className="mono">{editMode?ec(r.pid,"energy_bill_cond",r.eBillCond,true,90):(r.eBillCond>0?fmt(r.eBillCond):"-")}</td>}
+        {isEnergyConta&&<td className="mono" style={editMode?{}:(()=>{const v=Number(r.eBillCond)||0;if(v>1500)return {background:"#fee2e2",color:"#991b1b",fontWeight:700};if(v>0&&v<200)return {background:"#fef3c7",color:"#92400e",fontWeight:600};return {};})()}>{editMode?ec(r.pid,"energy_bill_cond",r.eBillCond,true,90):(r.eBillCond>0?fmt(r.eBillCond):"-")}</td>}
         {hasOU&&<td><span className={`badge ${r.winner==="Energia"?"badge-warn":r.winner==="%Fat"?"badge-info":"badge-ok"}`}>{r.winner}</span></td>}
         <td className="mono" style={{fontWeight:600}}>{fmt(r.sub)}</td>
         <td className="mono">{editMode?ec(r.pid,"manual_adjustment",r.adj,true,80):<span style={{color:r.adj!==0?"var(--warn)":"var(--color-text-tertiary)"}}>{r.adj!==0?fmt(r.adj):"-"}</span>}</td>
