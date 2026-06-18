@@ -2727,6 +2727,16 @@ export default function App() {
   const [uuidMap,setUuidMap]=useState({});     // vmpay_id → uuid
   const [revUuidMap,setRevUuidMap]=useState({}); // uuid → vmpay_id
 
+  // Os mapas de tradução são DERIVADOS da lista de PDVs: sempre que `pdvs` muda
+  // (login, realtime, edição, recarga), os mapas se reconstroem sozinhos. Assim
+  // a tradução vmpay_id↔uuid nunca fica desatualizada — evita o caso de salvar
+  // um PDV recém-criado/editado e o dado "sumir" por falta da chave no mapa.
+  useEffect(()=>{
+    const um={},rm={};
+    (pdvs||[]).forEach(p=>{if(p.id!=null)um[p.id]=p.uuid; if(p.uuid!=null)rm[p.uuid]=p.id;});
+    setUuidMap(um);setRevUuidMap(rm);
+  },[pdvs]);
+
   const period = activePeriod?.nome || "";
   const role = userRole?.role || "pendente";
   const canEdit = role==="master"||role==="admin";
@@ -2775,9 +2785,9 @@ export default function App() {
 
         setLoadMsg("Carregando PDVs...");
         const pdvList=await SB.loadPdvs();
-        const um={},rm={};
-        pdvList.forEach(p=>{um[p.id]=p.uuid;rm[p.uuid]=p.id;});
-        setUuidMap(um);setRevUuidMap(rm);setPdvs(pdvList);
+        setPdvs(pdvList); // uuidMap/revUuidMap são derivados via useEffect([pdvs])
+        // rm local só para uso imediato aqui (o estado revUuidMap só atualiza no próximo render)
+        const rm={};pdvList.forEach(p=>{if(p.uuid!=null)rm[p.uuid]=p.id;});
 
         setLoadMsg("Carregando períodos...");
         const periods=await SB.loadPeriods();
@@ -2833,9 +2843,7 @@ export default function App() {
     async function reloadPdvs(){
       try{
         const pdvList=await SB.loadPdvs();
-        const um={},rm={};
-        pdvList.forEach(p=>{um[p.id]=p.uuid;rm[p.uuid]=p.id;});
-        setUuidMap(um);setRevUuidMap(rm);setPdvs(pdvList);
+        setPdvs(pdvList); // mapas derivados via useEffect([pdvs])
         console.log("[realtime] PDVs recarregados");
       }catch(e){console.error("[realtime] reloadPdvs",e);}
     }
@@ -2995,10 +3003,7 @@ export default function App() {
     if(needsReload){
       try{
         const fresh=await SB.loadPdvs();
-        setPdvs(fresh);
-        const um={},rm={};
-        fresh.forEach(p=>{um[p.id]=p.uuid;rm[p.uuid]=p.id;});
-        setUuidMap(um);setRevUuidMap(rm);
+        setPdvs(fresh); // mapas derivados via useEffect([pdvs])
         // After PDV reload, recalc with fresh data
         await recalcAndSaveResults(fresh, md, activePeriod);
       }catch(e){console.error("Reload error:",e);}
@@ -3013,20 +3018,25 @@ export default function App() {
     setMd(newMd);
     if(!activePeriod){console.warn("No active period, skipping save");return;}
     // Collect all changed records for bulk upsert
-    const records=[];const auditItems=[];
+    const records=[];const auditItems=[];const unmapped=[];
     const mdLabels={meter_start:"Medidor início",meter_end:"Medidor fim",raw_revenue:"Faturamento",
       manual_adjustment:"Ajuste",energy_bill_cond:"Conta energia"};
     for(const[pid,data] of Object.entries(newMd)){
-      const puuid=uuidMap[pid];
-      if(!puuid){continue;}
       const old=prevMd[pid]||{};const pdv=pdvs.find(x=>x.id===pid);
-      // Persist a row if it holds any data OR if any tracked field changed vs the
-      // previous state — this covers zeroing-out a value (e.g. 5000 → 0), which
-      // must overwrite the old value in the DB instead of being silently skipped.
       const fields=["meter_start","meter_end","raw_revenue","manual_adjustment","energy_bill_cond"];
       const hasData=fields.some(k=>(data[k]||0)!==0);
       const changed=fields.some(k=>(data[k]||0)!==(old[k]||0))
         ||(data.manual_adjustment_desc||"")!==(old.manual_adjustment_desc||"");
+      const puuid=uuidMap[pid];
+      if(!puuid){
+        // Não foi possível traduzir vmpay_id → uuid. Em vez de descartar em silêncio,
+        // registra para avisar o usuário — mas só se havia dado a gravar.
+        if(hasData||changed)unmapped.push(pdv?.name||pid);
+        continue;
+      }
+      // Persist a row if it holds any data OR if any tracked field changed vs the
+      // previous state — this covers zeroing-out a value (e.g. 5000 → 0), which
+      // must overwrite the old value in the DB instead of being silently skipped.
       if(hasData||changed) records.push({pdvUuid:puuid,data});
       // Audit field-level changes
       Object.keys(mdLabels).forEach(k=>{
@@ -3045,6 +3055,12 @@ export default function App() {
       }
       // ALWAYS recalc after a save so Calcular/Dashboard/Financeiro stay in sync
       await recalcAndSaveResults(pdvs, newMd, activePeriod);
+      // Ponto 3: avisa, em vez de descartar em silêncio, PDVs que não puderam ser salvos.
+      if(unmapped.length>0){
+        alert("⚠ Não foi possível salvar "+unmapped.length+" PDV(s) porque estão sem ID VMPAY válido ou desatualizados na tela:\n\n• "+
+          unmapped.join("\n• ")+
+          "\n\nDê um F5/Ctrl+Shift+R para recarregar os PDVs e tente novamente. Se persistir, confira o cadastro (ID VMPAY) desses PDVs.");
+      }
     }catch(e){
       console.error("Bulk save error:",e);
       alert("Erro ao salvar no banco: "+e.message);
