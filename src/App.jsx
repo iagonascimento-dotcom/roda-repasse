@@ -1889,6 +1889,23 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
   const [justify,setJustify]=useState(null);
   const [changeCount,setChangeCount]=useState(0);
   const [lastSave,setLastSave]=useState("");
+  const [sortKey,setSortKey]=useState(null);   // chave da coluna a ordenar
+  const [sortDir,setSortDir]=useState("asc");   // "asc" | "desc"
+  function toggleSort(key){
+    if(editMode)return; // não ordenar durante edição
+    if(sortKey===key){setSortDir(d=>d==="asc"?"desc":"asc");}
+    else{setSortKey(key);setSortDir("asc");}
+  }
+  // Renderiza um <th> ordenável. key=chave da coluna; se null, não é ordenável.
+  function SH(label,key,baseStyle={}){
+    const active=sortKey===key&&!editMode;
+    const arrow=active?(sortDir==="asc"?" ▲":" ▼"):"";
+    const editStyle=baseStyle.__edit?{background:"#fffbe6"}:{};
+    const st={...editStyle,...(baseStyle.style||{}),cursor:(key&&!editMode)?"pointer":"default",userSelect:"none",whiteSpace:"nowrap"};
+    return <th style={st} onClick={key?()=>toggleSort(key):undefined} title={key&&!editMode?"Clique para ordenar":undefined}>
+      {label}{editMode&&baseStyle.__edit?" ✎":""}<span style={{color:active?"var(--accent)":"var(--color-text-tertiary)",fontSize:10}}>{arrow}</span>
+    </th>;
+  }
   useEffect(()=>{if(onDirty)onDirty(editMode?changeCount:0);},[changeCount,editMode]);
 
   const typePdvs=pdvs.filter(p=>p.contract_type===selType);
@@ -1957,6 +1974,25 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
       const maxVal=Math.max(...vals.map(v=>v.val));winner=vals.find(v=>v.val===maxVal)?.name||"";}
     return {p:ep,pid:p.id,ms,me,eb,raw,cr,pr,mn,adj,sub,total:sub+adj,kwh,pct,rf,eBillCond,winner,revType:ep.revenue_consideration};
   });
+  // Ordenação por coluna (não altera os totais; só a ordem de exibição).
+  if(sortKey&&!editMode){
+    const getVal=(r)=>{
+      switch(sortKey){
+        case "name":return (r.p.name||"").toLowerCase();
+        case "pid":return Number(r.pid)||0;
+        case "revType":return (r.revType||"").toLowerCase();
+        case "winner":return (r.winner||"").toLowerCase();
+        default:return Number(r[sortKey])||0; // colunas numéricas: mn, ms, me, eb, raw, cr, pct, pr, eBillCond, sub, adj, total
+      }
+    };
+    rows.sort((a,b)=>{
+      const va=getVal(a),vb=getVal(b);
+      let c;
+      if(typeof va==="number"&&typeof vb==="number")c=va-vb;
+      else c=String(va).localeCompare(String(vb),"pt-BR");
+      return sortDir==="asc"?c:-c;
+    });
+  }
   const totalRepasse=rows.reduce((s,r)=>s+r.total,0),totalSub=rows.reduce((s,r)=>s+r.sub,0);
 
   const editSt2={padding:"3px 6px",fontSize:12,borderRadius:5,border:"1.5px solid var(--accent)",background:"#fffbe6"};
@@ -2023,16 +2059,16 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
       })()}
     </div>
     {typePdvs.length>0?<div className="card" style={{padding:0,overflow:"hidden"}}><div className="scroll-x"><table>
-      <thead><tr><th>ID</th><th>Nome do PDV</th>
-        {hasMin&&<th style={editMode?{background:"#fffbe6"}:{}}>Mínimo{editMode&&" ✎"}</th>}
-        {hasMeter&&<><th style={editMode?{background:"#fffbe6"}:{}}>Med. início{editMode&&" ✎"}</th><th style={editMode?{background:"#fffbe6"}:{}}>Med. fim{editMode&&" ✎"}</th>
-          <th style={editMode?{background:"#fffbe6"}:{}}>kWh{editMode&&" ✎"}</th><th>Energia</th></>}
-        {hasRev&&<><th style={editMode?{background:"#fffbe6"}:{}}>Fat. bruto{editMode&&" ✎"}</th><th>Tipo rec.</th><th>Fat. cálculo</th>
-          <th style={editMode?{background:"#fffbe6"}:{}}>%{editMode&&" ✎"}</th><th>Valor %</th></>}
-        {isEnergyConta&&<th style={editMode?{background:"#fffbe6"}:{}}>Conta energ.{editMode&&" ✎"}</th>}
-        {hasOU&&<th>Vencedor</th>}
-        <th>Subtotal</th><th style={editMode?{background:"#fffbe6"}:{}}>Ajuste{editMode&&" ✎"}</th>
-        <th style={{background:"var(--accent-bg)"}}>Total</th></tr></thead>
+      <thead><tr>{SH("ID","pid")}{SH("Nome do PDV","name")}
+        {hasMin&&SH("Mínimo","mn",{__edit:true})}
+        {hasMeter&&<>{SH("Med. início","ms",{__edit:true})}{SH("Med. fim","me",{__edit:true})}
+          {SH("kWh","kwh",{__edit:true})}{SH("Energia","eb")}</>}
+        {hasRev&&<>{SH("Fat. bruto","raw",{__edit:true})}{SH("Tipo rec.","revType")}{SH("Fat. cálculo","cr")}
+          {SH("%","pct",{__edit:true})}{SH("Valor %","pr")}</>}
+        {isEnergyConta&&SH("Conta energ.","eBillCond",{__edit:true})}
+        {hasOU&&SH("Vencedor","winner")}
+        {SH("Subtotal","sub")}{SH("Ajuste","adj",{__edit:true})}
+        {SH("Total","total",{style:{background:"var(--accent-bg)"}})}</tr></thead>
       <tbody>{rows.map(r=>{
         // Alerta de problema: total negativo, ou (em contratos com medidor) medidor
         // início/fim ausente ou invertido (fim < início → energia negativa).
