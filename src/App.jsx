@@ -599,6 +599,8 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const [loadingComp,setLoadingComp]=useState(false);
   const [filterType,setFilterType]=useState(null);
   const [filterRevCons,setFilterRevCons]=useState(null); // "Líquido" | "Bruto" | null
+  const [repDay,setRepDay]=useState("todos"); // filtro GLOBAL de dia: "todos" | "20" | "3"
+  const [repFilter,setRepFilter]=useState("nenhum"); // recorte: nenhum|repasse1000|medidor1000|bruto|liquido
   const [searchPdvs,setSearchPdvs]=useState([]); // array of strings (selected PDV names/terms)
   const [searchInput,setSearchInput]=useState("");
   const [searchOpen,setSearchOpen]=useState(false);
@@ -739,10 +741,11 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     return Object.values(acc);
   })();
 
-  // Apply ALL filters (type + revenue consideration + name search)
+  // Apply ALL filters (type + revenue consideration + name search + payment day)
   function passesFilters(pdvId){
     if(filterType&&pdvType[pdvId]!==filterType)return false;
     if(filterRevCons&&pdvRevCons[pdvId]!==filterRevCons)return false;
+    if(repDay!=="todos"&&String(pdvPayDay[pdvId]||20)!==repDay)return false;
     if(searchTerms.length>0){
       const n=pdvName[pdvId]||"";
       // match if ANY term is found in the name
@@ -872,46 +875,42 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   }
 
   /* ─── Relatórios rápidos (seção nova) ─── */
-  const [repDay,setRepDay]=useState("todos"); // "todos" | "20" | "3"
-  // Filtro de dia de pagamento aplicado ao conjunto de resultados do período ativo.
-  function passDay(pdvId){
-    if(repDay==="todos")return true;
-    return String(pdvPayDay[pdvId]||20)===repDay;
-  }
-  // Base: resultados do período ativo, enriquecidos com dados do PDV.
-  const repBase=(results||[]).map(r=>{
+  // Base: resultados do período ativo enriquecidos, já filtrados pelos filtros globais
+  // (que incluem o dia de pagamento via passesFilters).
+  const repBaseAll=(results||[]).map(r=>{
     const p=pdvs.find(x=>x.id===r.id)||{};
     return {...r, name:r.name||p.name||"", contract_type:r.contract_type||p.contract_type||"",
       revenue_consideration:p.revenue_consideration||r.revenue_consideration||"",
       payment_day:pdvPayDay[r.id]||p.payment_day||20,
       minimal_repass:p.minimal_repass||0, negotiated_percentage:p.negotiated_percentage||0,
       kwh_unity_price:p.kwh_unity_price||0};
-  }).filter(r=>passDay(r.id)&&passesFilters(r.id));
+  }).filter(r=>passesFilters(r.id));
 
-  // 1) Contas de luz acima de 1.000 OU contrato de Medidor
-  const energiaAlerta=repBase.filter(r=>{
-    const ct=r.contract_type||"";
-    const isMedidor=ct.includes("Medidor");
-    return (r.energyBill||0)>1000 || isMedidor;
-  }).sort((a,b)=>(b.energyBill||0)-(a.energyBill||0));
-
-  // 2) PDVs com repasse considerado BRUTO
-  const brutoList=repBase.filter(r=>r.revenue_consideration==="Bruto")
+  // Recorte selecionável (1 por vez)
+  function passRep(r){
+    switch(repFilter){
+      case "repasse1000":return (r.total||0)>1000;
+      case "medidor1000":return (r.contract_type||"").includes("Medidor")&&(r.energyBill||0)>1000;
+      case "bruto":return r.revenue_consideration==="Bruto";
+      case "liquido":return r.revenue_consideration==="Líquido";
+      default:return true; // "nenhum"
+    }
+  }
+  const repBase=repBaseAll.filter(passRep)
     .sort((a,b)=>(b.total||0)-(a.total||0));
 
-  // Exporta lista demonstrativa (mesmos campos do Demonstrativo) em Excel, respeitando dia/filtros.
+  // Exporta lista demonstrativa (mesmos campos do Demonstrativo) em Excel, respeitando dia + recorte.
   function exportDemonstrativo(){
     if(!repBase.length){alert("Nada para exportar neste período/filtro.");return;}
     const header=["ID","Nome do PDV","Tipo de contrato","Tipo receita","Dia pagamento",
       "Mínimo","kWh","Energia","Fat. cálculo","% negociado","Valor %","Subtotal","Ajuste","Total"];
     const data=[header];
-    [...repBase].sort((a,b)=>(b.total||0)-(a.total||0)).forEach(r=>{
+    repBase.forEach(r=>{
       const adj=(r.total||0)-(r.subtotal||0);
       data.push([r.id, r.name, r.contract_type, r.revenue_consideration, r.payment_day,
         r.minimal_repass||0, r.kwh_unity_price||0, r.energyBill||0, r.calcRevenue||0,
         (r.negotiated_percentage||0), r.pctRevenue||0, r.subtotal||0, adj, r.total||0]);
     });
-    // Linha de total
     data.push(["","","","","","","","","","","TOTAL",
       repBase.reduce((s,r)=>s+(r.subtotal||0),0),
       repBase.reduce((s,r)=>s+((r.total||0)-(r.subtotal||0)),0),
@@ -921,9 +920,10 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     ws['!freeze']={xSplit:0,ySplit:1};
     const wb=XLSX.utils.book_new();
     const diaLabel=repDay==="todos"?"todos":("dia"+repDay);
+    const recorteLabel={nenhum:"geral",repasse1000:"repasse_acima_1000",medidor1000:"medidor_acima_1000",bruto:"bruto",liquido:"liquido"}[repFilter]||"geral";
     XLSX.utils.book_append_sheet(wb,ws,"Demonstrativo");
     const safePeriod=(period||"periodo").replace(/[^\w]+/g,"_");
-    XLSX.writeFile(wb,`demonstrativo_${safePeriod}_${diaLabel}.xlsx`);
+    XLSX.writeFile(wb,`demonstrativo_${safePeriod}_${diaLabel}_${recorteLabel}.xlsx`);
   }
 
   return <div className="fade-in">
@@ -952,6 +952,15 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
             background:viewMode==="operacional"?"var(--accent)":"#fff",color:viewMode==="operacional"?"#fff":"var(--color-text-secondary)"}}>Mês operacional</div>
           <div onClick={()=>setViewMode("pagamento")} style={{padding:"7px 12px",fontSize:12,cursor:"pointer",fontWeight:600,borderLeft:"1px solid var(--color-border-tertiary)",
             background:viewMode==="pagamento"?"var(--accent)":"#fff",color:viewMode==="pagamento"?"#fff":"var(--color-text-secondary)"}}>Mês de pagamento</div>
+        </div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+        <label style={{fontSize:11,color:"var(--color-text-secondary)",fontWeight:600}}>Dia de pagamento</label>
+        <div style={{display:"inline-flex",borderRadius:8,overflow:"hidden",border:"1px solid var(--color-border-tertiary)"}}>
+          {[["todos","Todos"],["20","Dia 20"],["3","Dia 03"]].map(([k,l],i)=>
+            <div key={k} onClick={()=>setRepDay(k)} style={{padding:"7px 12px",fontSize:12,cursor:"pointer",fontWeight:600,
+              borderLeft:i>0?"1px solid var(--color-border-tertiary)":"none",
+              background:repDay===k?"var(--orange)":"#fff",color:repDay===k?"#fff":"var(--color-text-secondary)"}}>{l}</div>)}
         </div>
       </div>
       {(isAgg||viewMode==="pagamento")&&viewLoading&&<div style={{fontSize:12,color:"var(--color-text-secondary)",fontStyle:"italic",paddingBottom:8}}>
@@ -1134,64 +1143,45 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
 
     {/* ─── Relatórios rápidos ─── */}
     <div className="card">
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:6}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:10}}>
         <div className="h3" style={{margin:0}}>📋 Relatórios rápidos — {period||"sem período"}</div>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <span style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)"}}>Dia de pagamento:</span>
-          {[["todos","Todos"],["20","Dia 20"],["3","Dia 03"]].map(([k,l])=>
-            <button key={k} className={repDay===k?"btn btn-p":"btn btn-s"} style={{fontSize:12,padding:"5px 12px"}}
-              onClick={()=>setRepDay(k)}>{l}</button>)}
-          {canExport&&<button className="btn btn-o" style={{fontSize:12,padding:"5px 12px"}} onClick={exportDemonstrativo}>⬇ Exportar Demonstrativo</button>}
-        </div>
+        {canExport&&<button className="btn btn-o" style={{fontSize:12,padding:"6px 14px"}} onClick={exportDemonstrativo}>⬇ Exportar Demonstrativo</button>}
       </div>
+
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
+        <span style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",marginRight:4}}>Recorte:</span>
+        {[["nenhum","Todos"],["repasse1000","Repasse > R$1.000"],["medidor1000","Medidor > R$1.000"],["bruto","Bruto"],["liquido","Líquido"]].map(([k,l])=>
+          <button key={k} className={repFilter===k?"btn btn-p":"btn btn-s"} style={{fontSize:12,padding:"5px 12px"}}
+            onClick={()=>setRepFilter(k)}>{l}</button>)}
+      </div>
+
       <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:14}}>
-        Baseado nos resultados calculados do período ativo. O filtro de dia e os filtros do topo (tipo/receita/busca) também se aplicam aqui.
+        Baseado nos resultados calculados do período ativo. O botão Dia 20/03 do topo e os filtros (tipo/receita/busca) também se aplicam aqui.
       </div>
 
-      <div className="grid2" style={{alignItems:"start"}}>
-        {/* 1) Contas de luz > 1000 ou Medidor */}
-        <div>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:8,display:"flex",justifyContent:"space-between"}}>
-            <span>⚡ Energia acima de R$1.000 ou contrato Medidor</span>
-            <span style={{color:"var(--color-text-tertiary)"}}>{energiaAlerta.length}</span>
-          </div>
-          {energiaAlerta.length===0?<div className="empty" style={{fontSize:12}}>Nenhum PDV neste critério.</div>:
-          <div className="scroll-x" style={{maxHeight:320,overflowY:"auto"}}><table>
-            <thead><tr><th>PDV</th><th>Tipo</th><th style={{textAlign:"right"}}>Energia</th><th style={{textAlign:"right"}}>Total</th></tr></thead>
-            <tbody>{energiaAlerta.map(r=>
-              <tr key={r.id}>
-                <td className="trunc" style={{fontWeight:500,maxWidth:180}}>{r.name}</td>
-                <td style={{fontSize:11,color:"var(--color-text-secondary)"}}>{r.contract_type?.includes("Medidor")?"Medidor":"—"}</td>
-                <td className="mono" style={{textAlign:"right",fontWeight:600,color:(r.energyBill||0)>1000?"#991b1b":"inherit"}}>{(r.energyBill||0)>0?fmt(r.energyBill):"-"}</td>
-                <td className="mono" style={{textAlign:"right",fontWeight:600}}>{fmt(r.total)}</td>
-              </tr>)}
-            </tbody>
-          </table></div>}
-        </div>
-
-        {/* 2) Repasse BRUTO */}
-        <div>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:8,display:"flex",justifyContent:"space-between"}}>
-            <span>💰 PDVs com repasse BRUTO</span>
-            <span style={{color:"var(--color-text-tertiary)"}}>{brutoList.length}</span>
-          </div>
-          {brutoList.length===0?<div className="empty" style={{fontSize:12}}>Nenhum PDV com receita Bruto.</div>:
-          <div className="scroll-x" style={{maxHeight:320,overflowY:"auto"}}><table>
-            <thead><tr><th>PDV</th><th>Tipo</th><th style={{textAlign:"right"}}>Total</th></tr></thead>
-            <tbody>{brutoList.map(r=>
-              <tr key={r.id}>
-                <td className="trunc" style={{fontWeight:500,maxWidth:200}}>{r.name}</td>
-                <td style={{fontSize:11,color:"var(--color-text-secondary)"}} className="trunc">{r.contract_type}</td>
-                <td className="mono" style={{textAlign:"right",fontWeight:600}}>{fmt(r.total)}</td>
-              </tr>)}
-              <tr style={{fontWeight:700,borderTop:"2px solid var(--color-border-secondary)"}}>
-                <td colSpan={2} style={{textAlign:"right"}}>TOTAL</td>
-                <td className="mono" style={{textAlign:"right",color:"var(--accent)"}}>{fmt(brutoList.reduce((s,r)=>s+(r.total||0),0))}</td>
-              </tr>
-            </tbody>
-          </table></div>}
-        </div>
-      </div>
+      {repBase.length===0?<div className="empty" style={{fontSize:12}}>Nenhum PDV neste critério/período.</div>:
+      <div className="scroll-x" style={{maxHeight:480,overflowY:"auto"}}><table>
+        <thead><tr><th>ID</th><th>PDV</th><th>Tipo</th><th>Receita</th><th style={{textAlign:"center"}}>Dia</th>
+          <th style={{textAlign:"right"}}>Energia</th><th style={{textAlign:"right"}}>Subtotal</th><th style={{textAlign:"right"}}>Total</th></tr></thead>
+        <tbody>{repBase.map(r=>
+          <tr key={r.id}>
+            <td className="mono" style={{fontSize:11}}>{r.id}</td>
+            <td className="trunc" style={{fontWeight:500,maxWidth:200}}>{r.name}</td>
+            <td className="trunc" style={{fontSize:11,color:"var(--color-text-secondary)",maxWidth:160}}>{r.contract_type}</td>
+            <td style={{fontSize:11}}><span className={`badge ${r.revenue_consideration==="Bruto"?"badge-warn":"badge-info"}`}>{r.revenue_consideration||"—"}</span></td>
+            <td style={{textAlign:"center",fontSize:11,fontWeight:600}}>{r.payment_day}</td>
+            <td className="mono" style={{textAlign:"right",fontWeight:600,color:(r.energyBill||0)>1000?"#991b1b":"inherit"}}>{(r.energyBill||0)>0?fmt(r.energyBill):"-"}</td>
+            <td className="mono" style={{textAlign:"right"}}>{fmt(r.subtotal)}</td>
+            <td className="mono" style={{textAlign:"right",fontWeight:700,color:(r.total||0)<0?"#991b1b":"var(--accent)"}}>{fmt(r.total)}</td>
+          </tr>)}
+          <tr style={{fontWeight:700,borderTop:"2px solid var(--color-border-secondary)"}}>
+            <td colSpan={5} style={{textAlign:"right"}}>TOTAL ({repBase.length} PDVs)</td>
+            <td className="mono" style={{textAlign:"right"}}>{fmt(repBase.reduce((s,r)=>s+(r.energyBill||0),0))}</td>
+            <td className="mono" style={{textAlign:"right"}}>{fmt(repBase.reduce((s,r)=>s+(r.subtotal||0),0))}</td>
+            <td className="mono" style={{textAlign:"right",color:"var(--accent)"}}>{fmt(repBase.reduce((s,r)=>s+(r.total||0),0))}</td>
+          </tr>
+        </tbody>
+      </table></div>}
     </div>
   </div>;
 }
