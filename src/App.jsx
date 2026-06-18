@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 
 const CONTRACT_TYPES = [
@@ -277,6 +277,75 @@ const SB = {
   async removeIgnored(vmpay_id){
     await this.api(`/rest/v1/pdvs_ignorados?vmpay_id=eq.${encodeURIComponent(vmpay_id)}`,
       {method:"DELETE",headers:{"Prefer":"return=minimal"}});
+  },
+
+  /* ─── Realtime (native WebSocket, no extra dependency) ─── */
+  // Subscribes to postgres changes on the given tables. onChange(table, payload)
+  // fires for every INSERT/UPDATE/DELETE. Returns a disconnect() function.
+  subscribeRealtime(tables, onChange){
+    const wsUrl=SB_URL.replace(/^http/,"ws")+`/realtime/v1/websocket?apikey=${SB_KEY}&vsn=1.0.0`;
+    let ws=null, heartbeat=null, ref=0, closedByUs=false, reconnectTimer=null;
+    const topics={}; // table -> topic name
+    const nextRef=()=>String(++ref);
+
+    function joinAll(){
+      tables.forEach(t=>{
+        const topic=`realtime:public:${t}`;
+        topics[t]=topic;
+        ws.send(JSON.stringify({
+          topic, event:"phx_join", ref:nextRef(),
+          payload:{config:{
+            postgres_changes:[{event:"*",schema:"public",table:t}]
+          }}
+        }));
+      });
+    }
+
+    function connect(){
+      closedByUs=false;
+      try{ws=new WebSocket(wsUrl);}catch(e){console.error("[realtime] ws error",e);scheduleReconnect();return;}
+
+      ws.onopen=()=>{
+        console.log("[realtime] conectado");
+        joinAll();
+        heartbeat=setInterval(()=>{
+          if(ws&&ws.readyState===1){
+            ws.send(JSON.stringify({topic:"phoenix",event:"heartbeat",payload:{},ref:nextRef()}));
+          }
+        },25000);
+      };
+
+      ws.onmessage=(evt)=>{
+        let msg;try{msg=JSON.parse(evt.data);}catch{return;}
+        if(msg.event==="postgres_changes"&&msg.payload?.data){
+          const d=msg.payload.data;
+          const table=d.table;
+          if(table&&typeof onChange==="function"){
+            try{onChange(table,d);}catch(e){console.error("[realtime] onChange",e);}
+          }
+        }
+      };
+
+      ws.onclose=()=>{
+        if(heartbeat){clearInterval(heartbeat);heartbeat=null;}
+        if(!closedByUs){console.warn("[realtime] desconectado — reconectando...");scheduleReconnect();}
+      };
+      ws.onerror=()=>{/* onclose handles reconnect */};
+    }
+
+    function scheduleReconnect(){
+      if(reconnectTimer)return;
+      reconnectTimer=setTimeout(()=>{reconnectTimer=null;connect();},3000);
+    }
+
+    connect();
+
+    return function disconnect(){
+      closedByUs=true;
+      if(heartbeat){clearInterval(heartbeat);heartbeat=null;}
+      if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+      if(ws){try{ws.close();}catch{}ws=null;}
+    };
   },
 };
 
@@ -2712,6 +2781,117 @@ export default function App() {
     })();
   },[authed,authEmail]);
 
+  /* ─── Realtime: telas atualizam sozinhas quando o banco muda ─── */
+  // Mantém refs atualizadas pra que a assinatura (criada uma única vez) sempre
+  // leia o período/uuid-map mais recentes sem precisar reassinar.
+  const activePeriodRef=useRef(activePeriod);
+  const revUuidMapRef=useRef(revUuidMap);
+  const pdvsRef=useRef(pdvs);
+  const dirtyRef=useRef(dirty);
+  useEffect(()=>{activePeriodRef.current=activePeriod;},[activePeriod]);
+  useEffect(()=>{revUuidMapRef.current=revUuidMap;},[revUuidMap]);
+  useEffect(()=>{pdvsRef.current=pdvs;},[pdvs]);
+  useEffect(()=>{dirtyRef.current=dirty;},[dirty]);
+
+  useEffect(()=>{
+    if(!ready||!userRole||userRole.role==="pendente")return;
+
+    // Recarregadores — sempre buscam do banco (banco é a fonte da verdade).
+    // Debounced por tabela pra agrupar rajadas de eventos (ex.: n8n gravando várias linhas).
+    const timers={};
+    function schedule(key,fn,delay=400){
+      if(timers[key])clearTimeout(timers[key]);
+      timers[key]=setTimeout(()=>{timers[key]=null;fn();},delay);
+    }
+    // Se houver edição pendente na tela (dirty>0), adia o reload pra não apagar
+    // o que o usuário está digitando. O banco continua sendo a fonte da verdade —
+    // assim que ele salvar ou cancelar (dirty volta a 0), o reload pendente aplica.
+    function guarded(key,fn){
+      if(dirtyRef.current>0){schedule(key,()=>guarded(key,fn),1500);return;}
+      fn();
+    }
+
+    async function reloadPdvs(){
+      try{
+        const pdvList=await SB.loadPdvs();
+        const um={},rm={};
+        pdvList.forEach(p=>{um[p.id]=p.uuid;rm[p.uuid]=p.id;});
+        setUuidMap(um);setRevUuidMap(rm);setPdvs(pdvList);
+        console.log("[realtime] PDVs recarregados");
+      }catch(e){console.error("[realtime] reloadPdvs",e);}
+    }
+
+    async function reloadPeriods(){
+      try{
+        const periods=await SB.loadPeriods();
+        setAllPeriods(periods);
+        const ap=activePeriodRef.current;
+        if(ap){
+          const updated=periods.find(p=>p.id===ap.id);
+          if(updated)setActivePeriod(updated); // reflete status_dia20/dia3/fechamento
+        }
+        console.log("[realtime] Períodos recarregados");
+      }catch(e){console.error("[realtime] reloadPeriods",e);}
+    }
+
+    async function reloadPeriodData(){
+      const ap=activePeriodRef.current;
+      const rm=revUuidMapRef.current;
+      if(!ap?.id)return;
+      try{
+        const monthlyData=await SB.loadMonthlyData(ap.id,rm);
+        setMd(monthlyData);
+        const res=await SB.loadResults(ap.id,rm);
+        const list=pdvsRef.current||[];
+        const resWithNames=res.map(r=>{const p=list.find(x=>x.id===r.id);return {...r,name:p?.name||r.name};});
+        setResults(resWithNames);
+        console.log("[realtime] Dados do período recarregados");
+      }catch(e){console.error("[realtime] reloadPeriodData",e);}
+    }
+
+    async function reloadIgnored(){
+      // pdvs_ignorados é lido localmente pela tela de Entrada; força um refresh global leve
+      // recarregando PDVs (a tela escuta seu próprio estado, mas mantemos consistência).
+      schedule("pdvs",reloadPdvs,400);
+    }
+
+    function onlyForActivePeriod(payload){
+      const ap=activePeriodRef.current;
+      if(!ap?.id)return false;
+      const rec=payload.record||payload.old_record||{};
+      // Se o evento traz periodo_id, só recarrega se for do período ativo.
+      if(rec.periodo_id!==undefined)return rec.periodo_id===ap.id;
+      return true;
+    }
+
+    const disconnect=SB.subscribeRealtime(
+      ["periodos","pdvs","dados_mensais","resultados","change_requests","pdvs_ignorados"],
+      (table,payload)=>{
+        switch(table){
+          case "pdvs":
+            schedule("pdvs",()=>guarded("pdvs",reloadPdvs),400);break;
+          case "periodos":
+            schedule("periodos",reloadPeriods,300);break;
+          case "dados_mensais":
+          case "resultados":
+            if(onlyForActivePeriod(payload))schedule("perioddata",()=>guarded("perioddata",reloadPeriodData),500);break;
+          case "pdvs_ignorados":
+            schedule("ignored",reloadIgnored,400);break;
+          case "change_requests":
+            // change_requests é carregado sob demanda na tela de aprovações;
+            // não força reload global pra não atrapalhar quem está no meio de uma ação.
+            console.log("[realtime] change_requests alterado");break;
+          default:break;
+        }
+      }
+    );
+
+    return ()=>{
+      Object.values(timers).forEach(t=>t&&clearTimeout(t));
+      disconnect();
+    };
+  },[ready,userRole]);
+
   /* ─── Save helpers ─── */
   // Recalculates ALL results for a period using fresh pdvs/md and persists to Supabase.
   // Called automatically after any md or pdv change so Calcular/Dashboard/Financeiro stay in sync.
@@ -2820,11 +3000,16 @@ export default function App() {
     for(const[pid,data] of Object.entries(newMd)){
       const puuid=uuidMap[pid];
       if(!puuid){continue;}
-      const hasData=(data.meter_start||0)>0||(data.meter_end||0)>0||(data.raw_revenue||0)>0
-        ||(data.manual_adjustment||0)!==0||(data.energy_bill_cond||0)>0;
-      if(hasData) records.push({pdvUuid:puuid,data});
-      // Audit field-level changes
       const old=prevMd[pid]||{};const pdv=pdvs.find(x=>x.id===pid);
+      // Persist a row if it holds any data OR if any tracked field changed vs the
+      // previous state — this covers zeroing-out a value (e.g. 5000 → 0), which
+      // must overwrite the old value in the DB instead of being silently skipped.
+      const fields=["meter_start","meter_end","raw_revenue","manual_adjustment","energy_bill_cond"];
+      const hasData=fields.some(k=>(data[k]||0)!==0);
+      const changed=fields.some(k=>(data[k]||0)!==(old[k]||0))
+        ||(data.manual_adjustment_desc||"")!==(old.manual_adjustment_desc||"");
+      if(hasData||changed) records.push({pdvUuid:puuid,data});
+      // Audit field-level changes
       Object.keys(mdLabels).forEach(k=>{
         if((data[k]||0)!==(old[k]||0)){
           auditItems.push({entidade:"Dados mensais",entidade_nome:pdv?.name||pid,campo:mdLabels[k],
