@@ -2941,8 +2941,12 @@ function DisparoEmail({pdvs, md, period, activePeriod}){
     const d=md[p.id]||{};
     const n=v=>{const x=Number(v)||0;return x;};
     const ms=n(d.meter_start), me=n(d.meter_end), kwh=n(p.kwh_unity_price);
-    const raw=n(d.raw_revenue), pct=n(p.negotiated_percentage), mn=n(p.minimal_repass);
+    const rawBruto=n(d.raw_revenue), pct=n(p.negotiated_percentage), mn=n(p.minimal_repass);
     const eb=n(d.energy_bill_cond);
+    // Faturamento de CÁLCULO: respeita Líquido vs Bruto, igual ao motor de cálculo (rev * rf).
+    // Bruto = valor cheio; Líquido = desconta imposto (fator LIQ). Antes saía sempre o bruto — bug.
+    const rf=(p.revenue_consideration==="Bruto")?1.0:LIQ;
+    const raw=rawBruto*rf;
     return {
       "Código do Local":p.id||"",
       "Local":p.name||"",
@@ -2952,7 +2956,7 @@ function DisparoEmail({pdvs, md, period, activePeriod}){
       "Consumo Inicio do Periodo":hasMeter&&ms?ms:"",
       "Consumo Fim do Periodo":hasMeter&&me?me:"",
       "Valor KwH":hasMeter&&kwh?kwh:"",
-      "Faturamento Total":hasPct&&raw?raw:"",
+      "Faturamento Total":hasPct&&raw?Math.round(raw*100)/100:"",
       "Percentual":hasPct&&pct?pct:"",
       "Repasse Mínimo":hasMin&&mn?mn:"",
       "Conta de Energia":isEnergiaConta&&eb?eb:"",
