@@ -279,6 +279,19 @@ const SB = {
       {method:"DELETE",headers:{"Prefer":"return=minimal"}});
   },
 
+  /* ─── E-mails dos PDVs (para o template de disparo) ─── */
+  async loadEmails(){
+    return this.api("/rest/v1/pdv_emails?select=*");
+  },
+  // Importa/atualiza em lote. items: [{vmpay_id, local, email}]
+  async upsertEmails(items){
+    if(!items.length) return;
+    const body=items.map(i=>({vmpay_id:String(i.vmpay_id).trim(),local:i.local||"",email:(i.email||"").trim(),updated_at:new Date().toISOString()}));
+    await this.api("/rest/v1/pdv_emails",{method:"POST",
+      body:JSON.stringify(body),
+      headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
+  },
+
   /* ─── Realtime (native WebSocket, no extra dependency) ─── */
   // Subscribes to postgres changes on the given tables. onChange(table, payload)
   // fires for every INSERT/UPDATE/DELETE. Returns a disconnect() function.
@@ -2893,6 +2906,197 @@ function ReasonModal({title,pdvLabel,placeholder,onConfirm,onCancel}){
   </div>;
 }
 
+/* ─── Disparo de E-mail (template editável + importação de e-mails) ─── */
+function DisparoEmail({pdvs, md, period, activePeriod}){
+  const TEMPLATE_COLS=["Código do Local","Local","Email","Tipo de Repasse","Enviar Comprovante",
+    "Consumo Inicio do Periodo","Consumo Fim do Periodo","Valor KwH",
+    "Faturamento Total","Percentual","Repasse Mínimo","Conta de Energia"];
+  const NUM_COLS=["Consumo Inicio do Periodo","Consumo Fim do Periodo","Valor KwH","Faturamento Total","Percentual","Repasse Mínimo","Conta de Energia"];
+
+  const [emails,setEmails]=useState({}); // vmpay_id -> email
+  const [rows,setRows]=useState([]);     // linhas geradas (editáveis localmente)
+  const [dia,setDia]=useState("20");      // "20" | "3"
+  const [loading,setLoading]=useState(false);
+  const [importing,setImporting]=useState(false);
+  const [importText,setImportText]=useState("");
+  const [showImport,setShowImport]=useState(false);
+  const [msg,setMsg]=useState("");
+
+  // Carrega e-mails do banco ao montar
+  useEffect(()=>{(async()=>{
+    try{
+      const list=await SB.loadEmails();
+      const m={};(list||[]).forEach(e=>{m[String(e.vmpay_id)]=e.email||"";});
+      setEmails(m);
+    }catch(e){console.error("loadEmails",e);}
+  })();},[]);
+
+  function buildRow(p){
+    const ct=p.contract_type||"";
+    const hasMeter=ct.includes("Medidor");
+    const hasPct=ct.includes("Percentual de Faturamento")||ct.includes("Percentual do Faturamento");
+    const hasMin=ct.includes("Mínimo")||ct==="Fixo";
+    const isEnergiaConta=ct.includes("Conta de Energia")||ct.toLowerCase().includes("medidor conta");
+    const enviar=ct.includes("Percentual de Faturamento");
+    const d=md[p.id]||{};
+    const n=v=>{const x=Number(v)||0;return x;};
+    const ms=n(d.meter_start), me=n(d.meter_end), kwh=n(p.kwh_unity_price);
+    const raw=n(d.raw_revenue), pct=n(p.negotiated_percentage), mn=n(p.minimal_repass);
+    const eb=n(d.energy_bill_cond);
+    return {
+      "Código do Local":p.id||"",
+      "Local":p.name||"",
+      "Email":emails[String(p.id)]||"",
+      "Tipo de Repasse":ct,
+      "Enviar Comprovante":enviar,
+      "Consumo Inicio do Periodo":hasMeter&&ms?ms:"",
+      "Consumo Fim do Periodo":hasMeter&&me?me:"",
+      "Valor KwH":hasMeter&&kwh?kwh:"",
+      "Faturamento Total":hasPct&&raw?raw:"",
+      "Percentual":hasPct&&pct?pct:"",
+      "Repasse Mínimo":hasMin&&mn?mn:"",
+      "Conta de Energia":isEnergiaConta&&eb?eb:"",
+    };
+  }
+
+  function gerar(){
+    setLoading(true);setMsg("");
+    const list=(pdvs||[]).filter(p=>String(p.payment_day||20)===dia)
+      .sort((a,b)=>(a.name||"").localeCompare(b.name||"","pt-BR"))
+      .map(buildRow);
+    setRows(list);
+    setLoading(false);
+    setMsg(`${list.length} PDV(s) gerados para o Dia ${dia}.`);
+  }
+
+  function editCell(ri,col,val){
+    setRows(rs=>rs.map((r,i)=>i===ri?{...r,[col]:val}:r));
+  }
+
+  async function importarEmails(){
+    if(!importText.trim()){setMsg("Cole a lista primeiro.");return;}
+    setImporting(true);setMsg("");
+    try{
+      // Aceita TSV (colado do Excel) ou CSV. Espera Código | Local | Email
+      const lines=importText.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+      const items=[];
+      for(const ln of lines){
+        const parts=ln.split(/\t|;|,/).map(s=>s.trim());
+        if(parts.length<2)continue;
+        const cod=parts[0];
+        if(/^c[óo]digo/i.test(cod))continue; // pula cabeçalho
+        // último campo com @ é o email; código é o primeiro
+        let email="",local="";
+        if(parts.length>=3){local=parts[1];email=parts[2];}
+        else{email=parts[1];}
+        if(!cod)continue;
+        items.push({vmpay_id:cod,local,email});
+      }
+      if(!items.length){setMsg("Nenhuma linha válida encontrada.");setImporting(false);return;}
+      await SB.upsertEmails(items);
+      // Atualiza estado local
+      const m={...emails};items.forEach(i=>{m[String(i.vmpay_id)]=i.email;});
+      setEmails(m);
+      // Reaplica nos rows já gerados
+      setRows(rs=>rs.map(r=>({...r,Email:m[String(r["Código do Local"])]??r.Email})));
+      setMsg(`${items.length} e-mail(s) importado(s) e salvos no banco.`);
+      setImportText("");setShowImport(false);
+    }catch(e){console.error(e);setMsg("Erro ao importar: "+e.message);}
+    setImporting(false);
+  }
+
+  function exportar(){
+    if(!rows.length){setMsg("Gere a lista primeiro.");return;}
+    const XLSXlib=XLSX;
+    const aoa=[TEMPLATE_COLS];
+    rows.forEach(r=>{
+      aoa.push(TEMPLATE_COLS.map(c=>{
+        const v=r[c];
+        if(c==="Enviar Comprovante")return v?true:false;
+        if(NUM_COLS.includes(c)&&v!==""&&v!=null)return Number(v);
+        return v??"";
+      }));
+    });
+    const ws=XLSXlib.utils.aoa_to_sheet(aoa);
+    ws['!cols']=[{wch:16},{wch:42},{wch:34},{wch:44},{wch:18},{wch:24},{wch:24},{wch:12},{wch:18},{wch:12},{wch:16},{wch:16}];
+    ws['!freeze']={xSplit:0,ySplit:1};
+    const wb=XLSXlib.utils.book_new();
+    XLSXlib.utils.book_append_sheet(wb,ws,`Dia ${dia}`);
+    const safe=(period||"periodo").replace(/[^\w]+/g,"_");
+    XLSXlib.writeFile(wb,`disparo_email_${safe}_dia${dia}.xlsx`);
+  }
+
+  const comEmail=rows.filter(r=>r.Email).length;
+
+  return <div className="fade-in">
+    <div className="h2" style={{marginBottom:6}}>✉ Disparo de E-mail</div>
+    <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:14}}>
+      Gere o template do período {period?`(${period})`:""}, revise/edite os valores e baixe. As edições aqui valem só para o arquivo baixado — não alteram o banco. Os e-mails ficam salvos e são reusados todo mês.
+    </div>
+
+    <div className="card" style={{marginBottom:14}}>
+      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+        <span style={{fontSize:12,fontWeight:600}}>Dia de pagamento:</span>
+        {[["20","Dia 20"],["3","Dia 03"]].map(([k,l])=>
+          <button key={k} className={dia===k?"btn btn-p":"btn btn-s"} style={{fontSize:12,padding:"6px 14px"}}
+            onClick={()=>setDia(k)}>{l}</button>)}
+        <button className="btn btn-p" style={{fontSize:12,padding:"6px 14px"}} onClick={gerar} disabled={loading}>
+          {loading?"Gerando...":"⟳ Gerar template"}</button>
+        <button className="btn btn-s" style={{fontSize:12,padding:"6px 14px"}} onClick={()=>setShowImport(s=>!s)}>📥 Importar e-mails</button>
+        <button className="btn btn-o" style={{fontSize:12,padding:"6px 14px"}} onClick={exportar} disabled={!rows.length}>⬇ Baixar Excel</button>
+      </div>
+      {msg&&<div style={{fontSize:12,color:"var(--accent)",marginTop:10,fontWeight:600}}>{msg}</div>}
+      {rows.length>0&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:8}}>
+        {rows.length} PDV(s) · {comEmail} com e-mail · {rows.length-comEmail} sem e-mail
+      </div>}
+    </div>
+
+    {showImport&&<div className="card" style={{marginBottom:14}}>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>Importar e-mails em lote</div>
+      <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:8}}>
+        Cole as colunas <b>Código do Local</b>, <b>Local</b> e <b>Email</b> (copiadas do Excel ou separadas por vírgula/ponto-e-vírgula). Uma linha por PDV. Casa pelo Código do Local. Salva no banco e reutiliza nos próximos meses.
+      </div>
+      <textarea value={importText} onChange={e=>setImportText(e.target.value)}
+        placeholder={"22565\tMM RODA SÃO CRISTOVÃO\tpedro@exemplo.com\n13386\tMC QUEEN ELIZABETH\tcontato@exemplo.com"}
+        style={{width:"100%",minHeight:120,fontFamily:"monospace",fontSize:12,padding:10,borderRadius:8,border:"1px solid var(--color-border-tertiary)"}}/>
+      <div style={{marginTop:8,display:"flex",gap:8}}>
+        <button className="btn btn-p" style={{fontSize:12}} onClick={importarEmails} disabled={importing}>{importing?"Importando...":"Salvar e-mails"}</button>
+        <button className="btn btn-s" style={{fontSize:12}} onClick={()=>{setShowImport(false);setImportText("");}}>Cancelar</button>
+      </div>
+    </div>}
+
+    {rows.length>0&&<div className="card">
+      <div className="scroll-x" style={{maxHeight:560,overflowY:"auto"}}>
+        <table style={{fontSize:12}}>
+          <thead><tr>{TEMPLATE_COLS.map(c=><th key={c} style={{whiteSpace:"nowrap"}}>{c}</th>)}</tr></thead>
+          <tbody>{rows.map((r,ri)=>
+            <tr key={ri}>
+              {TEMPLATE_COLS.map(c=>{
+                if(c==="Código do Local")return <td key={c} className="mono" style={{fontSize:11}}>{r[c]}</td>;
+                if(c==="Local")return <td key={c} className="trunc" style={{fontWeight:500,maxWidth:180}}>{r[c]}</td>;
+                if(c==="Tipo de Repasse")return <td key={c} className="trunc" style={{fontSize:11,maxWidth:160,color:"var(--color-text-secondary)"}}>{r[c]}</td>;
+                if(c==="Enviar Comprovante")return <td key={c} style={{textAlign:"center"}}>
+                  <span className={`badge ${r[c]?"badge-ok":"badge-info"}`}>{r[c]?"TRUE":"FALSE"}</span></td>;
+                // demais colunas: editáveis
+                return <td key={c} style={{padding:2}}>
+                  <input value={r[c]===""||r[c]==null?"":r[c]}
+                    onChange={e=>editCell(ri,c,e.target.value)}
+                    style={{width:c==="Email"?180:90,fontSize:12,padding:"4px 6px",border:"1px solid var(--color-border-tertiary)",borderRadius:6,
+                      background:c==="Email"&&!r[c]?"#fff7ed":"#fff"}}/>
+                </td>;
+              })}
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </div>}
+
+    {rows.length===0&&!loading&&<div className="empty" style={{fontSize:13}}>
+      Escolha o dia e clique em "Gerar template" para visualizar os PDVs.
+    </div>}
+  </div>;
+}
+
 /* ─── LOGO SVG DATA ─── */
 const LOGO_SVG = "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBzdGFuZGFsb25lPSJubyI/Pgo8IURPQ1RZUEUgc3ZnIFBVQkxJQyAiLS8vVzNDLy9EVEQgU1ZHIDEuMS8vRU4iICJodHRwOi8vd3d3LnczLm9yZy9HcmFwaGljcy9TVkcvMS4xL0RURC9zdmcxMS5kdGQiPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiIHdpZHRoPSI4NC43NSIgem9vbUFuZFBhbj0ibWFnbmlmeSIgdmlld0JveD0iMCAwIDg0Ljc1IDg0Ljc0OTk5OSIgaGVpZ2h0PSI4NC43NSIgcHJlc2VydmVBc3BlY3RSYXRpbz0ieE1pZFlNaWQgbWVldCIgdmVyc2lvbj0iMS4wIj48ZGVmcz48Y2xpcFBhdGggaWQ9ImE5MDUwMjIzOTciPjxwYXRoIGQ9Ik0gMzYuMjgxMjUgMjcuNTkzNzUgTCA1Ny4yNDYwOTQgMjcuNTkzNzUgTCA1Ny4yNDYwOTQgNTcuMTk1MzEyIEwgMzYuMjgxMjUgNTcuMTk1MzEyIFogTSAzNi4yODEyNSAyNy41OTM3NSAiIGNsaXAtcnVsZT0ibm9uemVybyIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSI2NjgxZmQxZjQ3Ij48cGF0aCBkPSJNIDQ3LjEwOTM3NSA0My43NSBDIDQ3LjAxMTcxOSA0My42NDA2MjUgNDYuOTEwMTU2IDQzLjUzMTI1IDQ2LjgyMDMxMiA0My40MjE4NzUgQyA0Ni4wNTQ2ODggNDMuOTQ5MjE5IDQ1LjI1NzgxMiA0NC40Mzc1IDQ0LjUxOTUzMSA0NS4wMTU2MjUgQyA0Mi45NDE0MDYgNDYuMjIyNjU2IDQxLjUxNTYyNSA0Ny42MDkzNzUgNDAuNjk5MjE5IDQ5LjUxMTcxOSBDIDQwLjE3OTY4OCA1MC42OTkyMTkgMzkuOTE0MDYyIDUxLjk1NzAzMSA0MC4zMTI1IDUzLjU2MjUgQyA0My44MzIwMzEgNTEuMDI3MzQ0IDQ1LjE4NzUgNDcuMTcxODc1IDQ3LjEyMTA5NCA0My43NSBNIDQ2LjcyMjY1NiAzOS4yNTM5MDYgQyA0Ni45Mjk2ODggMzkuMzA0Njg4IDQ3LjQxMDE1NiAzOS4zMjQyMTkgNDcuNzg5MDYyIDM5LjUyMzQzOCBDIDQ4LjUyNzM0NCAzOS45MjE4NzUgNDguNzE0ODQ0IDM5LjU4MjAzMSA0OC45MTQwNjIgMzguODk0NTMxIEMgNDkuNTgyMDMxIDM2LjU0Mjk2OSA1MC4zMDA3ODEgMzQuMTg3NSA1MS4wMzEyNSAzMS44NTU0NjkgQyA1MS4zMzk4NDQgMzAuODY3MTg4IDUxLjcyNjU2MiAyOS45MDIzNDQgNTIuMDY2NDA2IDI4LjkyNTc4MSBDIDUyLjI0NjA5NCAyOC4zOTQ1MzEgNTIuNTkzNzUgMjguMTk1MzEyIDUzLjEyNSAyOC4xMzY3MTkgQyA1NC4xMjg5MDYgMjguMDE1NjI1IDU1LjEzNjcxOSAyNy44MDg1OTQgNTYuMTQ0NTMxIDI3LjY1NjI1IEMgNTYuMzI0MjE5IDI3LjYyODkwNiA1Ni42NDQ1MzEgMjcuNjk5MjE5IDU2LjY4MzU5NCAyNy44MDg1OTQgQyA1Ni45ODA0NjkgMjguNjA1NDY5IDU3LjQ0OTIxOSAyOS40MjE4NzUgNTYuOTQxNDA2IDMwLjI4OTA2MiBDIDU0LjUwNzgxMiAzNC4zOTg0MzggNTMuNjYwMTU2IDM5LjA0Mjk2OSA1Mi43MzQzNzUgNDMuNjcxODc1IEMgNTIuMjE0ODQ0IDQ2LjI3MzQzOCA1MS44NzUgNDguOTE0MDYyIDUxLjQzNzUgNTEuNTQ2ODc1IEMgNTEuMjE4NzUgNTIuOTAyMzQ0IDUxLjMwODU5NCA1NC4xOTkyMTkgNTIuMDI3MzQ0IDU1LjQwNjI1IEMgNTIuMTM2NzE5IDU1LjU5Mzc1IDUyLjA0Njg3NSA1Ni4wOTM3NSA1MS44NzUgNTYuMjUzOTA2IEMgNTAuNTcwMzEyIDU3LjQ4MDQ2OSA1MC40MDIzNDQgNTcuNDgwNDY5IDQ5LjIyNjU2MiA1Ni4wODIwMzEgQyA0OC41ODU5MzggNTUuMzI0MjE5IDQ4LjA0Njg3NSA1NC40NzY1NjIgNDcuNSA1My42NDA2MjUgQyA0Ni44MDA3ODEgNTIuNTg1OTM4IDQ2LjYzMjgxMiA1Mi41MTU2MjUgNDUuOTI1NzgxIDUzLjU4MjAzMSBDIDQ0LjkzNzUgNTUuMDY2NDA2IDQzLjY0MDYyNSA1NS45NzI2NTYgNDEuOTY0ODQ0IDU2LjM3MTA5NCBDIDM5LjM1NTQ2OSA1Ny4wMTE3MTkgMzcuMTc5Njg4IDU1LjYxMzI4MSAzNi41ODIwMzEgNTIuODgyODEyIEMgMzUuMTY3OTY5IDQ2LjM4MjgxMiAzOS45MjE4NzUgMzkuNzMwNDY5IDQ2LjMyNDIxOSAzOS4yNTM5MDYgQyA0Ni4zODI4MTIgMzkuMjQyMTg4IDQ2LjQzMzU5NCAzOS4yNTM5MDYgNDYuNzEwOTM4IDM5LjI1MzkwNiAiIGNsaXAtcnVsZT0ibm9uemVybyIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSIyODlhZWJhNWY0Ij48cGF0aCBkPSJNIDUzLjY5OTIxOSAzNi41MzUxNTYgTCA3NC4yMDMxMjUgMzYuNTM1MTU2IEwgNzQuMjAzMTI1IDU2LjI2OTUzMSBMIDUzLjY5OTIxOSA1Ni4yNjk1MzEgWiBNIDUzLjY5OTIxOSAzNi41MzUxNTYgIiBjbGlwLXJ1bGU9Im5vbnplcm8iLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iMzY4MjBlZGIyMSI+PHBhdGggZD0iTSA1Ny44NjcxODggNTEuNzg1MTU2IEMgNTkuNjY0MDYyIDUxLjM0NzY1NiA2NC41ODk4NDQgNDMuOTQ5MjE5IDY0LjM5ODQzOCA0Mi4wMzUxNTYgQyA2MC41MTk1MzEgNDQuMDg5ODQ0IDU2Ljg4MjgxMiA0OC4wNTg1OTQgNTcuODY3MTg4IDUxLjc4NTE1NiBNIDc0LjE5OTIxOSA1My4zODI4MTIgQyA3Mi44NjMyODEgNTYuMDkzNzUgNjkuMDA3ODEyIDU3LjEwOTM3NSA2Ni43OTI5NjkgNTUuNDU3MDMxIEMgNjUuOTg0Mzc1IDU0Ljg1NTQ2OSA2NS42NTYyNSA1My45ODgyODEgNjUuNTE1NjI1IDUzLjAxMTcxOSBDIDY1LjQwNjI1IDUyLjI0NjA5NCA2NS4yODkwNjIgNTEuNDg4MjgxIDY1LjE0ODQzOCA1MC40ODgyODEgQyA2NC40Njg3NSA1MS4yNDYwOTQgNjMuODgyODEyIDUxLjgwNDY4OCA2My4zOTQ1MzEgNTIuNDQ1MzEyIEMgNjEuOTM3NSA1NC4zNzg5MDYgNjAuMTMyODEyIDU1LjU5Mzc1IDU3LjczMDQ2OSA1NS44MjQyMTkgQyA1Ni45NDE0MDYgNTUuODk0NTMxIDU2LjMxMjUgNTUuNzY1NjI1IDU1Ljc1MzkwNiA1NS4yMTQ4NDQgQyA1My44MzIwMzEgNTMuMzMyMDMxIDUzLjMwMDc4MSA1MSA1NC4yMTg3NSA0OC40MjU3ODEgQyA1NS44NzUgNDMuNzgxMjUgNTguNjE3MTg4IDQwLjA2MjUgNjIuODE2NDA2IDM3LjY2MDE1NiBDIDY1LjE5OTIxOSAzNi4zMDA3ODEgNjcuNjQwNjI1IDM2LjIyMjY1NiA3MC4wMTE3MTkgMzcuNjY3OTY5IEMgNzEuNTI3MzQ0IDM4LjU4NTkzOCA3MS44MzU5MzggMzkuODMyMDMxIDcwLjk2MDkzOCA0MS40MjU3ODEgQyA3MC4yMDMxMjUgNDIuNzkyOTY5IDY5Ljc1MzkwNiA0NC4xODc1IDY5Ljc5Mjk2OSA0NS43OTI5NjkgQyA2OS44NTU0NjkgNDcuNzU3ODEyIDY5LjY2NDA2MiA0OS43NDIxODggNjkuODYzMjgxIDUxLjY5NTMxMiBDIDcwLjA5Mzc1IDUzLjg5ODQzOCA3MC45NjA5MzggNTQuMzU5Mzc1IDczLjAyMzQzOCA1My43NDIxODggQyA3My4zODI4MTIgNTMuNjMyODEyIDczLjc0MjE4OCA1My41MTk1MzEgNzQuMTkxNDA2IDUzLjM4MjgxMiAiIGNsaXAtcnVsZT0ibm9uemVybyIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSJhZTQyMmIxYzkzIj48cGF0aCBkPSJNIDIxLjMyODEyNSAzOC4zODY3MTkgTCAzNi4yODEyNSAzOC4zODY3MTkgTCAzNi4yODEyNSA1Ny4xOTUzMTIgTCAyMS4zMjgxMjUgNTcuMTk1MzEyIFogTSAyMS4zMjgxMjUgMzguMzg2NzE5ICIgY2xpcC1ydWxlPSJub256ZXJvIi8+PC9jbGlwUGF0aD48Y2xpcFBhdGggaWQ9IjM2NTM5YTdmNDUiPjxwYXRoIGQ9Ik0gMjUuNzY1NjI1IDUxLjk0NTMxMiBDIDI1Ljc2NTYyNSA1Mi4xNzU3ODEgMjUuNzUzOTA2IDUyLjQxNDA2MiAyNS43NjU2MjUgNTIuNjQ0NTMxIEMgMjUuODA0Njg4IDUzLjY3MTg3NSAyNi4wOTM3NSA1My44Nzg5MDYgMjYuOTIxODc1IDUzLjMyMDMxMiBDIDI3LjU4OTg0NCA1Mi44NzUgMjguMjQ2MDk0IDUyLjMzNTkzOCAyOC43MjY1NjIgNTEuNjk1MzEyIEMgMzAuNjAxNTYyIDQ5LjE3NTc4MSAzMS4zMTY0MDYgNDYuMjIyNjU2IDMxLjM4NjcxOSA0My4wODIwMzEgQyAzMS4zOTg0MzggNDIuNzkyOTY5IDMxLjA3MDMxMiA0Mi4zMTI1IDMwLjgwODU5NCA0Mi4yMzQzNzUgQyAzMC4zMDA3ODEgNDIuMDc0MjE5IDI5LjY3MTg3NSA0MS42Njc5NjkgMjkuMjE0ODQ0IDQyLjM1NTQ2OSBDIDI3LjMwMDc4MSA0NS4yNDYwOTQgMjUuNjU2MjUgNDguMjU3ODEyIDI1Ljc2NTYyNSA1MS45NDUzMTIgTSAyMS4zOTg0MzggNTEuMzI4MTI1IEMgMjEuNDg4MjgxIDQ2LjMyNDIxOSAyMy4zMzk4NDQgNDIuNTIzNDM4IDI2LjU4MjAzMSAzOS40NTMxMjUgQyAyNy41ODk4NDQgMzguNDk2MDk0IDI4Ljc1MzkwNiAzOC4xMjUgMzAuMDg5ODQ0IDM4Ljg4MjgxMiBDIDMwLjQ2ODc1IDM5LjA5Mzc1IDMwLjk4ODI4MSAzOS4wMzUxNTYgMzEuNDM3NSAzOS4wODU5MzggQyAzMi42NDQ1MzEgMzkuMjAzMTI1IDMzLjg1OTM3NSAzOS4yMzQzNzUgMzUuMDQ2ODc1IDM5LjQ1MzEyNSBDIDM1Ljg1NTQ2OSAzOS42MDE1NjIgMzYuMzMyMDMxIDQwLjI4MTI1IDM2LjI3MzQzOCA0MS4xNzk2ODggQyAzNS45MzM1OTQgNDYuODEyNSAzNC4yMTg3NSA1MS43NzczNDQgMjkuODMyMDMxIDU1LjM4NjcxOSBDIDI5LjM4MjgxMiA1NS43NjU2MjUgMjguODg2NzE5IDU2LjA5Mzc1IDI4LjM2NzE4OCA1Ni4zNzEwOTQgQyAyNi40MTQwNjIgNTcuNDQxNDA2IDI1LjQxNDA2MiA1Ny4yNjk1MzEgMjMuODUxNTYyIDU1LjY2NDA2MiBDIDIzLjYwOTM3NSA1NS40MjU3ODEgMjMuMzkwNjI1IDU1LjE0NDUzMSAyMy4xMjEwOTQgNTQuOTU3MDMxIEMgMjEuNzU3ODEyIDU0IDIxLjI2NTYyNSA1Mi42MzI4MTIgMjEuMzk4NDM4IDUxLjMyODEyNSAiIGNsaXAtcnVsZT0ibm9uemVybyIvPjwvY2xpcFBhdGg+PGNsaXBQYXRoIGlkPSI1ZmI0ZWE4YzI2Ij48cGF0aCBkPSJNIDEwLjUzNTE1NiAzNi44NDM3NSBMIDI0LjQxMDE1NiAzNi44NDM3NSBMIDI0LjQxMDE1NiA1Ni44ODY3MTkgTCAxMC41MzUxNTYgNTYuODg2NzE5IFogTSAxMC41MzUxNTYgMzYuODQzNzUgIiBjbGlwLXJ1bGU9Im5vbnplcm8iLz48L2NsaXBQYXRoPjxjbGlwUGF0aCBpZD0iZGY5Y2RlMzk2OSI+PHBhdGggZD0iTSAxNi43NjE3MTkgNDEuMTA5Mzc1IEMgMTcuMTQwNjI1IDQwLjYwOTM3NSAxNy40Njg3NSA0MC4wNTA3ODEgMTcuODk4NDM4IDM5LjYxMzI4MSBDIDE5LjE4MzU5NCAzOC4yOTY4NzUgMjAuNjk5MjE5IDM3LjQzNzUgMjIuNTQyOTY5IDM3LjM5MDYyNSBDIDIyLjg5NDUzMSAzNy4zNzg5MDYgMjMuMjgxMjUgMzcuNDE3OTY5IDIzLjU4OTg0NCAzNy41NzAzMTIgQyAyNC40MTAxNTYgMzcuOTg4MjgxIDI0LjQ3NjU2MiAzOC41NTQ2ODggMjMuODAwNzgxIDM5LjE4MzU5NCBDIDIzLjI0MjE4OCAzOS43MDMxMjUgMjIuNjY0MDYyIDQwLjIxMDkzOCAyMi4wNjY0MDYgNDAuNjc5Njg4IEMgMTguNDI1NzgxIDQzLjU3MDMxMiAxNi4zMTI1IDQ3LjQyOTY4OCAxNS40MTQwNjIgNTIuMDY2NDA2IEMgMTUuMjI2NTYyIDUzLjA1MDc4MSAxNS4xMjUgNTQuMDcwMzEyIDE1LjAzNTE1NiA1NS4wNzgxMjUgQyAxNC45MjU3ODEgNTYuMzk0NTMxIDE0LjMwODU5NCA1Ni45NDkyMTkgMTMuMDYyNSA1Ni43NzM0MzggQyAxMS43MjY1NjIgNTYuNTgyMDMxIDEwLjkyOTY4OCA1NS40OTYwOTQgMTAuNzU3ODEyIDUzLjg5ODQzOCBDIDEwLjMwMDc4MSA0OS41NDI5NjkgMTAuNzc3MzQ0IDQ1LjI3NzM0NCAxMS44MDQ2ODggNDEuMDQ2ODc1IEMgMTIuMDAzOTA2IDQwLjIzMDQ2OSAxMi4xMjUgMzkuMzk0NTMxIDEyLjM3NSAzOC42MDU0NjkgQyAxMi43NzM0MzggMzcuMzIwMzEyIDEzLjM3MTA5NCAzNi43ODkwNjIgMTQuMTY3OTY5IDM2Ljg3MTA5NCBDIDE1LjA2NjQwNiAzNi45NjA5MzggMTUuOTQxNDA2IDM3Ljk3NjU2MiAxNi4xMDE1NjIgMzkuMDkzNzUgQyAxNi4xODM1OTQgMzkuNjkxNDA2IDE2LjMwMDc4MSA0MC4yODkwNjIgMTYuNDEwMTU2IDQwLjg4NjcxOSBDIDE2LjUzMTI1IDQwLjk1NzAzMSAxNi42NDA2MjUgNDEuMDM5MDYyIDE2Ljc2MTcxOSA0MS4xMDkzNzUgIiBjbGlwLXJ1bGU9Im5vbnplcm8iLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjYTkwNTAyMjM5NykiPjxnIGNsaXAtcGF0aD0idXJsKCM2NjgxZmQxZjQ3KSI+PHBhdGggZmlsbD0iI2ZlOGEwMCIgZD0iTSA1LjYwNTQ2OSAyMi42NjQwNjIgTCA3OS4xMzY3MTkgMjIuNjY0MDYyIEwgNzkuMTM2NzE5IDYyLjEyNSBMIDUuNjA1NDY5IDYyLjEyNSBaIE0gNS42MDU0NjkgMjIuNjY0MDYyICIgZmlsbC1vcGFjaXR5PSIxIiBmaWxsLXJ1bGU9Im5vbnplcm8iLz48L2c+PC9nPjxnIGNsaXAtcGF0aD0idXJsKCMyODlhZWJhNWY0KSI+PGcgY2xpcC1wYXRoPSJ1cmwoIzM2ODIwZWRiMjEpIj48cGF0aCBmaWxsPSIjZmU4YTAwIiBkPSJNIDUuNjA1NDY5IDIyLjY2NDA2MiBMIDc5LjEzNjcxOSAyMi42NjQwNjIgTCA3OS4xMzY3MTkgNjIuMTI1IEwgNS42MDU0NjkgNjIuMTI1IFogTSA1LjYwNTQ2OSAyMi42NjQwNjIgIiBmaWxsLW9wYWNpdHk9IjEiIGZpbGwtcnVsZT0ibm9uemVybyIvPjwvZz48L2c+PGcgY2xpcC1wYXRoPSJ1cmwoI2FlNDIyYjFjOTMpIj48ZyBjbGlwLXBhdGg9InVybCgjMzY1MzlhN2Y0NSkiPjxwYXRoIGZpbGw9IiNmZThhMDAiIGQ9Ik0gNS42MDU0NjkgMjIuNjY0MDYyIEwgNzkuMTM2NzE5IDIyLjY2NDA2MiBMIDc5LjEzNjcxOSA2Mi4xMjUgTCA1LjYwNTQ2OSA2Mi4xMjUgWiBNIDUuNjA1NDY5IDIyLjY2NDA2MiAiIGZpbGwtb3BhY2l0eT0iMSIgZmlsbC1ydWxlPSJub256ZXJvIi8+PC9nPjwvZz48ZyBjbGlwLXBhdGg9InVybCgjNWZiNGVhOGMyNikiPjxnIGNsaXAtcGF0aD0idXJsKCNkZjljZGUzOTY5KSI+PHBhdGggZmlsbD0iI2ZlOGEwMCIgZD0iTSA1LjYwNTQ2OSAyMi42NjQwNjIgTCA3OS4xMzY3MTkgMjIuNjY0MDYyIEwgNzkuMTM2NzE5IDYyLjEyNSBMIDUuNjA1NDY5IDYyLjEyNSBaIE0gNS42MDU0NjkgMjIuNjY0MDYyICIgZmlsbC1vcGFjaXR5PSIxIiBmaWxsLXJ1bGU9Im5vbnplcm8iLz48L2c+PC9nPjwvc3ZnPg==";
 
@@ -3444,6 +3648,7 @@ export default function App() {
     ["calcular","≡","Calcular",["master","admin"]],
     ["demo","☷","Demonstrativo",["master","admin","usuario"]],
     ["fin","$","Financeiro",["master","admin"]],
+    ["disparo","✉","Disparo E-mail",["master","admin"]],
   ];
   const nav=allNav.filter(([,,, roles])=>roles.includes(role)).map(([k,ic,lb])=>[k,ic,lb]);
 
@@ -3532,6 +3737,7 @@ export default function App() {
           userRole={userRole} isLocked={isLocked} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
         {page==="fin"&&<Financeiro pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} results={results} period={period}
           savePdvs={canEdit?savePdvsToSB:noSave} onDirty={setDirty}/>}
+        {page==="disparo"&&<DisparoEmail pdvs={pdvs} md={md} period={period} activePeriod={activePeriod}/>}
       </div>
     </div>
   </>;
