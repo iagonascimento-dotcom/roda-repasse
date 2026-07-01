@@ -74,6 +74,31 @@ const SB = {
     const d=await r.json();if(d.error)throw new Error(d.error);
     this.token=d.access_token;return d;
   },
+  // Dispara o e-mail de recuperação. redirectTo deve apontar para o app publicado.
+  async resetPasswordForEmail(email,redirectTo){
+    const r=await fetch(`${SB_URL}/auth/v1/recover`,{
+      method:"POST",headers:{"apikey":SB_KEY,"Content-Type":"application/json"},
+      body:JSON.stringify({email,...(redirectTo?{redirect_to:redirectTo}:{})})});
+    if(!r.ok){let d={};try{d=await r.json();}catch{} 
+      throw new Error(d.error_description||d.msg||d.error||`Erro ${r.status}`);}
+    return true;
+  },
+  // Define a nova senha usando o access_token vindo do link de recuperação.
+  async updatePassword(accessToken,newPassword){
+    const r=await fetch(`${SB_URL}/auth/v1/user`,{
+      method:"PUT",headers:{"apikey":SB_KEY,"Authorization":`Bearer ${accessToken}`,"Content-Type":"application/json"},
+      body:JSON.stringify({password:newPassword})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.error){
+      const msg=(d.error_description||d.msg||d.error||"").toLowerCase();
+      if(msg.includes("password")||msg.includes("weak")||msg.includes("short"))
+        throw new Error("Senha muito fraca. Use pelo menos 6 caracteres.");
+      if(msg.includes("expired")||msg.includes("invalid"))
+        throw new Error("Link expirado ou inválido. Solicite um novo e-mail de recuperação.");
+      throw new Error(d.error_description||d.msg||d.error||`Erro ${r.status}`);
+    }
+    return d;
+  },
   /* PDVs */
   async loadPdvs(){
     const rows=await this.api("/rest/v1/pdvs?select=*&active=eq.true&order=nome");
@@ -615,6 +640,83 @@ function LoginScreen({onAuth}){
         {mode==="login"?<>Não tem acesso? <span style={{color:"#00314f",fontWeight:600,cursor:"pointer"}} onClick={()=>{setMode("signup");setErr("");setMsg("");}}>Solicitar</span></>
         :<>Já tem conta? <span style={{color:"#00314f",fontWeight:600,cursor:"pointer"}} onClick={()=>{setMode("login");setErr("");setMsg("");}}>Fazer login</span></>}
       </div>
+      {mode==="login"&&<div style={{textAlign:"center",marginTop:10,fontSize:12}}>
+        <span style={{color:"#00314f",fontWeight:600,cursor:"pointer"}} onClick={async()=>{
+          if(!email){setErr("Digite seu email acima para recuperar a senha.");return;}
+          setErr("");setMsg("");setLoading(true);
+          try{
+            // redireciona de volta para o app publicado (base do site, respeita o caminho do GitHub Pages)
+            const redir=window.location.origin+window.location.pathname;
+            await SB.resetPasswordForEmail(email,redir);
+            setMsg("Se este email estiver cadastrado, você receberá um link para redefinir a senha. Verifique também o spam.");
+          }catch(e){setErr(e.message||"Erro ao enviar email de recuperação.");}
+          finally{setLoading(false);}
+        }}>Esqueci minha senha</span>
+      </div>}
+    </div>
+  </div>;
+}
+
+/* ─── Reset Password Screen (aberta pelo link do e-mail) ─── */
+function ResetPasswordScreen({token,onDone}){
+  const [pw,setPw]=useState("");
+  const [pw2,setPw2]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+  const [ok,setOk]=useState(false);
+  const expired=token==="__expired__";
+  const inputSt={width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #e5e5e3",fontSize:14};
+
+  async function submit(){
+    if(pw.length<6){setErr("A senha deve ter pelo menos 6 caracteres.");return;}
+    if(pw!==pw2){setErr("As senhas não coincidem.");return;}
+    setErr("");setLoading(true);
+    try{
+      await SB.updatePassword(token,pw);
+      setOk(true);
+    }catch(e){setErr(e.message||"Erro ao redefinir a senha.");}
+    finally{setLoading(false);}
+  }
+
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",
+    background:"linear-gradient(135deg,#00314f 0%,#004d7a 100%)",fontFamily:"'DM Sans',sans-serif"}}>
+    <div style={{background:"#fff",borderRadius:16,padding:40,width:400,boxShadow:"0 20px 60px rgba(0,0,0,0.3)"}}>
+      <div style={{textAlign:"center",marginBottom:24}}>
+        <div style={{fontSize:28,fontWeight:700,color:"#00314f",marginBottom:4}}>Redefinir senha</div>
+        <div style={{fontSize:13,color:"#6b6b6b"}}>Roda Repasse</div>
+      </div>
+
+      {expired?<>
+        <div style={{padding:"12px 14px",borderRadius:8,background:"#fef0ed",color:"#f2401a",fontSize:13,marginBottom:16,fontWeight:500}}>
+          Este link expirou ou já foi usado. Os links de recuperação valem por tempo limitado e só podem ser usados uma vez.
+        </div>
+        <button onClick={onDone} style={{width:"100%",padding:"11px",borderRadius:8,border:"none",cursor:"pointer",
+          fontSize:14,fontWeight:700,fontFamily:"inherit",background:"#00314f",color:"#fff"}}>
+          Voltar ao login e solicitar novo link
+        </button>
+      </>:ok?<>
+        <div style={{padding:"12px 14px",borderRadius:8,background:"#f0ffe0",color:"#3d7a00",fontSize:13,marginBottom:16,fontWeight:500}}>
+          ✓ Senha redefinida com sucesso! Agora você já pode entrar com a nova senha.
+        </div>
+        <button onClick={onDone} style={{width:"100%",padding:"11px",borderRadius:8,border:"none",cursor:"pointer",
+          fontSize:14,fontWeight:700,fontFamily:"inherit",background:"#00314f",color:"#fff"}}>
+          Ir para o login
+        </button>
+      </>:<>
+        {err&&<div style={{padding:"8px 12px",borderRadius:8,background:"#fef0ed",color:"#f2401a",fontSize:12,marginBottom:12,fontWeight:500}}>{err}</div>}
+        <div className="field"><label style={{fontSize:11,fontWeight:600,color:"#6b6b6b",marginBottom:3,display:"block"}}>Nova senha</label>
+          <input type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="mínimo 6 caracteres"
+            style={inputSt} onKeyDown={e=>e.key==="Enter"&&submit()}/></div>
+        <div className="field"><label style={{fontSize:11,fontWeight:600,color:"#6b6b6b",marginBottom:3,display:"block"}}>Confirmar nova senha</label>
+          <input type="password" value={pw2} onChange={e=>setPw2(e.target.value)} placeholder="repita a senha"
+            style={inputSt} onKeyDown={e=>e.key==="Enter"&&submit()}/></div>
+        <button onClick={submit} disabled={loading}
+          style={{width:"100%",padding:"11px",borderRadius:8,border:"none",cursor:"pointer",
+            fontSize:14,fontWeight:700,fontFamily:"inherit",marginTop:8,
+            background:loading?"#ccc":"#00314f",color:"#fff"}}>
+          {loading?"Salvando...":"Redefinir senha"}
+        </button>
+      </>}
     </div>
   </div>;
 }
@@ -3257,6 +3359,21 @@ export default function App() {
 
   const [authed,setAuthed]=useState(false);
   const [authLoading,setAuthLoading]=useState(true);
+  // Detecta se o app foi aberto pelo link de recuperação de senha (hash com type=recovery).
+  const [recoveryToken,setRecoveryToken]=useState(()=>{
+    try{
+      const h=window.location.hash||"";
+      if(h.includes("type=recovery")&&h.includes("access_token")){
+        const p=new URLSearchParams(h.replace(/^#/,""));
+        return p.get("access_token")||null;
+      }
+      // Se o link expirou, o Supabase manda error_code=otp_expired no hash — sinaliza para a tela.
+      if(h.includes("error_code=otp_expired")||h.includes("error=access_denied")){
+        return "__expired__";
+      }
+    }catch{}
+    return null;
+  });
   const [page,setPage]=useState("dashboard");
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>{
     try{return localStorage.getItem("sidebar-collapsed")==="1";}catch{return false;}
@@ -3741,6 +3858,13 @@ export default function App() {
   /* ─── Render ─── */
   if(authLoading) return <div style={{display:"flex",justifyContent:"center",alignItems:"center",height:"100vh",
     fontFamily:"'DM Sans',sans-serif",color:"#6b6b6b"}}>{loadMsg}</div>;
+
+  // Fluxo de recuperação de senha (aberto via link do e-mail)
+  if(recoveryToken) return <><style>{css}</style>
+    <ResetPasswordScreen token={recoveryToken} onDone={()=>{
+      try{window.location.hash="";}catch{}
+      setRecoveryToken(null);
+    }}/></>;
 
   if(!authed) return <><style>{css}</style><LoginScreen onAuth={handleAuth}/></>;
 
