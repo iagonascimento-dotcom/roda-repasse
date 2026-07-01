@@ -292,6 +292,20 @@ const SB = {
       headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
   },
 
+  /* ─── MCR (PDVs com controle remoto de ar-condicionado) ─── */
+  async loadMcr(){
+    return this.api("/rest/v1/mcr?select=*");
+  },
+  async addMcr(vmpay_id,nome){
+    await this.api("/rest/v1/mcr",{method:"POST",
+      body:JSON.stringify([{vmpay_id:String(vmpay_id).trim(),nome:nome||""}]),
+      headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
+  },
+  async removeMcr(vmpay_id){
+    await this.api(`/rest/v1/mcr?vmpay_id=eq.${encodeURIComponent(vmpay_id)}`,
+      {method:"DELETE",headers:{"Prefer":"return=minimal"}});
+  },
+
   /* ─── Realtime (native WebSocket, no extra dependency) ─── */
   // Subscribes to postgres changes on the given tables. onChange(table, payload)
   // fires for every INSERT/UPDATE/DELETE. Returns a disconnect() function.
@@ -606,14 +620,24 @@ function LoginScreen({onAuth}){
 }
 
 /* ─── Dashboard ─── */
-function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,onLoadPeriodResults,revUuidMap,userRole}) {
+function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,onLoadPeriodResults,revUuidMap,userRole,md}) {
   const [compPeriods,setCompPeriods]=useState([]);
   const [compData,setCompData]=useState({});
   const [loadingComp,setLoadingComp]=useState(false);
   const [filterType,setFilterType]=useState(null);
   const [filterRevCons,setFilterRevCons]=useState(null); // "Líquido" | "Bruto" | null
   const [repDay,setRepDay]=useState("todos"); // filtro GLOBAL de dia: "todos" | "20" | "3"
-  const [repFilter,setRepFilter]=useState("nenhum"); // recorte: nenhum|repasse1000|medidor1000|bruto|liquido
+  // Construtor de filtros componível
+  const [filterConds,setFilterConds]=useState([]); // [{field,op,val}]
+  const [filterLogic,setFilterLogic]=useState("AND"); // "AND" | "OR"
+  const [dashNewField,setDashNewField]=useState({field:"energia",op:">",val:""}); // condição em construção
+  const [mcrList,setMcrList]=useState([]); // [{vmpay_id,nome}]
+  const mcrSet=new Set((mcrList||[]).map(m=>String(m.vmpay_id)));
+  const periodMd=md||{};
+  // Carrega lista de MCR do banco
+  useEffect(()=>{(async()=>{
+    try{const l=await SB.loadMcr();setMcrList(l||[]);}catch(e){console.error("loadMcr",e);}
+  })();},[]);
   const [searchPdvs,setSearchPdvs]=useState([]); // array of strings (selected PDV names/terms)
   const [searchInput,setSearchInput]=useState("");
   const [searchOpen,setSearchOpen]=useState(false);
@@ -887,28 +911,51 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="comparativo_periodos.csv";a.click();
   }
 
-  /* ─── Relatórios rápidos (seção nova) ─── */
-  // Base: resultados do período ativo enriquecidos, já filtrados pelos filtros globais
-  // (que incluem o dia de pagamento via passesFilters).
+  /* ─── Relatórios rápidos + Construtor de filtros ─── */
+  // Base enriquecida com todos os campos que os filtros podem usar.
   const repBaseAll=(results||[]).map(r=>{
     const p=pdvs.find(x=>x.id===r.id)||{};
+    const md=periodMd[r.id]||{};
+    const adj=(r.total||0)-(r.subtotal||0);
     return {...r, name:r.name||p.name||"", contract_type:r.contract_type||p.contract_type||"",
       revenue_consideration:p.revenue_consideration||r.revenue_consideration||"",
       payment_day:pdvPayDay[r.id]||p.payment_day||20,
       minimal_repass:p.minimal_repass||0, negotiated_percentage:p.negotiated_percentage||0,
-      kwh_unity_price:p.kwh_unity_price||0};
+      kwh_unity_price:p.kwh_unity_price||0,
+      ajuste:adj, ajuste_desc:md.manual_adjustment_desc||"",
+      is_mcr:mcrSet.has(String(r.id)),
+      meter_diff:(Number(md.meter_end)||0)-(Number(md.meter_start)||0)};
   }).filter(r=>passesFilters(r.id));
 
-  // Recorte selecionável (1 por vez)
-  function passRep(r){
-    switch(repFilter){
-      case "repasse1000":return (r.total||0)>1000;
-      case "medidor1000":return (r.contract_type||"").includes("Medidor")&&(r.energyBill||0)>1000;
-      case "bruto":return r.revenue_consideration==="Bruto";
-      case "liquido":return r.revenue_consideration==="Líquido";
-      default:return true; // "nenhum"
+  // Avalia UMA condição contra uma linha.
+  function evalCond(r,c){
+    const num=(v)=>Number(v)||0;
+    const cmp=(a,op,b)=>{a=num(a);b=num(b);
+      return op===">"?a>b:op===">="?a>=b:op==="<"?a<b:op==="<="?a<=b:op==="="?a===b:false;};
+    switch(c.field){
+      case "energia":return cmp(r.energyBill,c.op,c.val);
+      case "kwh":return cmp(r.kwh_unity_price,c.op,c.val);
+      case "repasse":return cmp(r.total,c.op,c.val);
+      case "faturamento":return cmp(r.calcRevenue,c.op,c.val);
+      case "consumo":return cmp(r.meter_diff,c.op,c.val);
+      case "minimo":return cmp(r.minimal_repass,c.op,c.val);
+      case "ajuste":return c.val==="com"?(r.ajuste!==0):(r.ajuste===0);
+      case "mcr":return c.val==="sim"?r.is_mcr:!r.is_mcr;
+      case "receita":return r.revenue_consideration===c.val;
+      case "tipo":return (r.contract_type||"")===c.val;
+      case "tipo_contem":return (r.contract_type||"").toLowerCase().includes(String(c.val||"").toLowerCase());
+      default:return true;
     }
   }
+  // Combina as condições com E/OU (filterLogic).
+  function passRep(r){
+    if(!filterConds.length)return true;
+    return filterLogic==="AND"
+      ? filterConds.every(c=>evalCond(r,c))
+      : filterConds.some(c=>evalCond(r,c));
+  }
+  // Mostra a coluna de descrição do ajuste se algum filtro de ajuste "com" estiver ativo.
+  const showAjusteDesc=filterConds.some(c=>c.field==="ajuste"&&c.val==="com");
   const repBase=repBaseAll.filter(passRep)
     .sort((a,b)=>(b.total||0)-(a.total||0));
 
@@ -916,17 +963,17 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   function exportDemonstrativo(){
     if(!repBase.length){alert("Nada para exportar neste período/filtro.");return;}
     const header=["ID","Nome do PDV","Tipo de contrato","Tipo receita","Dia pagamento",
-      "Mínimo","kWh","Energia","Fat. cálculo","% negociado","Valor %","Subtotal","Ajuste","Total"];
+      "Mínimo","kWh","Energia","Fat. cálculo","% negociado","Valor %","Subtotal","Ajuste","Descrição ajuste","MCR","Total"];
     const data=[header];
     repBase.forEach(r=>{
       const adj=(r.total||0)-(r.subtotal||0);
       data.push([r.id, r.name, r.contract_type, r.revenue_consideration, r.payment_day,
         r.minimal_repass||0, r.kwh_unity_price||0, r.energyBill||0, r.calcRevenue||0,
-        (r.negotiated_percentage||0), r.pctRevenue||0, r.subtotal||0, adj, r.total||0]);
+        (r.negotiated_percentage||0), r.pctRevenue||0, r.subtotal||0, adj, r.ajuste_desc||"", r.is_mcr?"Sim":"", r.total||0]);
     });
-    data.push(["","","","","","","","","","","TOTAL",
+    data.push(["","","","","","","","","","","","TOTAL",
       repBase.reduce((s,r)=>s+(r.subtotal||0),0),
-      repBase.reduce((s,r)=>s+((r.total||0)-(r.subtotal||0)),0),
+      repBase.reduce((s,r)=>s+((r.total||0)-(r.subtotal||0)),0),"","",
       repBase.reduce((s,r)=>s+(r.total||0),0)]);
     const ws=XLSX.utils.aoa_to_sheet(data);
     ws['!cols']=[{wch:10},{wch:38},{wch:34},{wch:12},{wch:12},{wch:12},{wch:10},{wch:14},{wch:14},{wch:12},{wch:14},{wch:14},{wch:12},{wch:14}];
@@ -1154,43 +1201,116 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
       </>}
     </div>}
 
-    {/* ─── Relatórios rápidos ─── */}
+    {/* ─── Relatórios rápidos com construtor de filtros ─── */}
     <div className="card">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:10}}>
-        <div className="h3" style={{margin:0}}>📋 Relatórios rápidos — {period||"sem período"}</div>
+        <div className="h3" style={{margin:0}}>🔎 Filtros avançados — {period||"sem período"}</div>
         {canExport&&<button className="btn btn-o" style={{fontSize:12,padding:"6px 14px"}} onClick={exportDemonstrativo}>⬇ Exportar Demonstrativo</button>}
       </div>
 
-      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
-        <span style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",marginRight:4}}>Recorte:</span>
-        {[["nenhum","Todos"],["repasse1000","Repasse > R$1.000"],["medidor1000","Medidor > R$1.000"],["bruto","Bruto"],["liquido","Líquido"]].map(([k,l])=>
-          <button key={k} className={repFilter===k?"btn btn-p":"btn btn-s"} style={{fontSize:12,padding:"5px 12px"}}
-            onClick={()=>setRepFilter(k)}>{l}</button>)}
-      </div>
+      {/* Barra de adicionar condição */}
+      {(()=>{
+        const FIELDS=[
+          ["energia","Energia (R$)","num"],["kwh","Valor kWh","num"],["repasse","Repasse total (R$)","num"],
+          ["faturamento","Faturamento cálculo (R$)","num"],["consumo","Consumo (kWh medidor)","num"],
+          ["minimo","Repasse mínimo (R$)","num"],
+          ["ajuste","Ajuste","ajuste"],["mcr","MCR (ar-condicionado)","mcr"],
+          ["receita","Tipo de receita","receita"],["tipo","Tipo de contrato","tipo"],
+          ["tipo_contem","Tipo contém texto","text"],
+        ];
+        const OPS=[">",">=","<","<=","="];
+        const [nf,setNf]=[dashNewField,setDashNewField];
+        const meta=FIELDS.find(f=>f[0]===nf.field)||FIELDS[0];
+        const kind=meta[2];
+        return <div style={{background:"var(--color-surface-secondary,#f8fafc)",borderRadius:10,padding:12,marginBottom:12}}>
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{fontSize:12,fontWeight:700}}>Adicionar filtro:</span>
+            <select value={nf.field} onChange={e=>setNf(n=>({...n,field:e.target.value,val:""}))}
+              style={{fontSize:12,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}>
+              {FIELDS.map(f=><option key={f[0]} value={f[0]}>{f[1]}</option>)}
+            </select>
+            {kind==="num"&&<>
+              <select value={nf.op} onChange={e=>setNf(n=>({...n,op:e.target.value}))}
+                style={{fontSize:12,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}>
+                {OPS.map(o=><option key={o} value={o}>{o}</option>)}
+              </select>
+              <input type="number" value={nf.val} onChange={e=>setNf(n=>({...n,val:e.target.value}))} placeholder="valor"
+                style={{width:110,fontSize:12,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}/>
+            </>}
+            {kind==="ajuste"&&<select value={nf.val} onChange={e=>setNf(n=>({...n,val:e.target.value}))}
+              style={{fontSize:12,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}>
+              <option value="">escolha</option><option value="com">Com ajuste</option><option value="sem">Sem ajuste</option></select>}
+            {kind==="mcr"&&<select value={nf.val} onChange={e=>setNf(n=>({...n,val:e.target.value}))}
+              style={{fontSize:12,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}>
+              <option value="">escolha</option><option value="sim">É MCR</option><option value="nao">Não é MCR</option></select>}
+            {kind==="receita"&&<select value={nf.val} onChange={e=>setNf(n=>({...n,val:e.target.value}))}
+              style={{fontSize:12,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}>
+              <option value="">escolha</option><option value="Líquido">Líquido</option><option value="Bruto">Bruto</option></select>}
+            {kind==="tipo"&&<select value={nf.val} onChange={e=>setNf(n=>({...n,val:e.target.value}))}
+              style={{fontSize:12,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)",maxWidth:240}}>
+              <option value="">escolha</option>{CONTRACT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>}
+            {kind==="text"&&<input value={nf.val} onChange={e=>setNf(n=>({...n,val:e.target.value}))} placeholder="ex.: Medidor"
+              style={{width:160,fontSize:12,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}/>}
+            <button className="btn btn-p" style={{fontSize:12,padding:"6px 12px"}}
+              onClick={()=>{
+                if(kind==="num"&&nf.val==="")return;
+                if(kind!=="num"&&!nf.val)return;
+                setFilterConds(cs=>[...cs,{field:nf.field,op:nf.op,val:kind==="num"?Number(nf.val):nf.val,label:meta[1]}]);
+                setNf(n=>({...n,val:""}));
+              }}>+ Adicionar</button>
+          </div>
+
+          {/* Condições ativas */}
+          {filterConds.length>0&&<div style={{marginTop:10,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+            <div style={{display:"inline-flex",borderRadius:6,overflow:"hidden",border:"1px solid var(--color-border-tertiary)",marginRight:4}}>
+              {["AND","OR"].map(l=><div key={l} onClick={()=>setFilterLogic(l)}
+                style={{padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700,
+                  background:filterLogic===l?"var(--accent)":"#fff",color:filterLogic===l?"#fff":"var(--color-text-secondary)"}}>
+                {l==="AND"?"E (todas)":"OU (qualquer)"}</div>)}
+            </div>
+            {filterConds.map((c,i)=>{
+              const opTxt=["energia","kwh","repasse","faturamento","consumo","minimo"].includes(c.field)?` ${c.op} ${c.val}`:
+                c.field==="ajuste"?(c.val==="com"?": com":": sem"):
+                c.field==="mcr"?(c.val==="sim"?": sim":": não"):`: ${c.val}`;
+              return <span key={i} style={{fontSize:11,background:"var(--accent-bg)",color:"var(--accent)",padding:"4px 8px",borderRadius:14,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6}}>
+                {c.label}{opTxt}
+                <span onClick={()=>setFilterConds(cs=>cs.filter((_,j)=>j!==i))} style={{cursor:"pointer",fontWeight:800}}>×</span>
+              </span>;
+            })}
+            <button className="btn btn-s" style={{fontSize:11,padding:"3px 10px"}} onClick={()=>setFilterConds([])}>Limpar tudo</button>
+          </div>}
+        </div>;
+      })()}
 
       <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:14}}>
-        Baseado nos resultados calculados do período ativo. O botão Dia 20/03 do topo e os filtros (tipo/receita/busca) também se aplicam aqui.
+        Combine quantos filtros quiser. Cada um com seu valor. O botão Dia 20/03 do topo e a busca também se aplicam. {filterConds.length>0&&<b>{repBase.length} PDV(s) encontrados.</b>}
       </div>
 
       {repBase.length===0?<div className="empty" style={{fontSize:12}}>Nenhum PDV neste critério/período.</div>:
-      <div className="scroll-x" style={{maxHeight:480,overflowY:"auto"}}><table>
-        <thead><tr><th>ID</th><th>PDV</th><th>Tipo</th><th>Receita</th><th style={{textAlign:"center"}}>Dia</th>
-          <th style={{textAlign:"right"}}>Energia</th><th style={{textAlign:"right"}}>Subtotal</th><th style={{textAlign:"right"}}>Total</th></tr></thead>
+      <div className="scroll-x" style={{maxHeight:520,overflowY:"auto"}}><table>
+        <thead><tr><th>ID</th><th>PDV</th><th>Tipo</th><th>Rec.</th><th style={{textAlign:"center"}}>MCR</th><th style={{textAlign:"center"}}>Dia</th>
+          <th style={{textAlign:"right"}}>kWh</th><th style={{textAlign:"right"}}>Energia</th>
+          <th style={{textAlign:"right"}}>Ajuste</th>{showAjusteDesc&&<th>Descrição ajuste</th>}
+          <th style={{textAlign:"right"}}>Total</th></tr></thead>
         <tbody>{repBase.map(r=>
           <tr key={r.id}>
             <td className="mono" style={{fontSize:11}}>{r.id}</td>
-            <td className="trunc" style={{fontWeight:500,maxWidth:200}}>{r.name}</td>
-            <td className="trunc" style={{fontSize:11,color:"var(--color-text-secondary)",maxWidth:160}}>{r.contract_type}</td>
-            <td style={{fontSize:11}}><span className={`badge ${r.revenue_consideration==="Bruto"?"badge-warn":"badge-info"}`}>{r.revenue_consideration||"—"}</span></td>
+            <td className="trunc" style={{fontWeight:500,maxWidth:180}}>{r.name}</td>
+            <td className="trunc" style={{fontSize:11,color:"var(--color-text-secondary)",maxWidth:140}}>{r.contract_type}</td>
+            <td style={{fontSize:11}}><span className={`badge ${r.revenue_consideration==="Bruto"?"badge-warn":"badge-info"}`}>{(r.revenue_consideration||"—").slice(0,3)}</span></td>
+            <td style={{textAlign:"center"}}>{r.is_mcr?<span title="MCR" style={{fontSize:14}}>❄️</span>:""}</td>
             <td style={{textAlign:"center",fontSize:11,fontWeight:600}}>{r.payment_day}</td>
+            <td className="mono" style={{textAlign:"right",fontSize:11}}>{r.kwh_unity_price?r.kwh_unity_price:"-"}</td>
             <td className="mono" style={{textAlign:"right",fontWeight:600,color:(r.energyBill||0)>1000?"#991b1b":"inherit"}}>{(r.energyBill||0)>0?fmt(r.energyBill):"-"}</td>
-            <td className="mono" style={{textAlign:"right"}}>{fmt(r.subtotal)}</td>
+            <td className="mono" style={{textAlign:"right",color:r.ajuste!==0?"var(--warn)":"var(--color-text-tertiary)"}}>{r.ajuste!==0?fmt(r.ajuste):"-"}</td>
+            {showAjusteDesc&&<td className="trunc" style={{fontSize:11,maxWidth:200,color:"var(--color-text-secondary)"}}>{r.ajuste_desc||"—"}</td>}
             <td className="mono" style={{textAlign:"right",fontWeight:700,color:(r.total||0)<0?"#991b1b":"var(--accent)"}}>{fmt(r.total)}</td>
           </tr>)}
           <tr style={{fontWeight:700,borderTop:"2px solid var(--color-border-secondary)"}}>
-            <td colSpan={5} style={{textAlign:"right"}}>TOTAL ({repBase.length} PDVs)</td>
+            <td colSpan={showAjusteDesc?7:7} style={{textAlign:"right"}}>TOTAL ({repBase.length} PDVs)</td>
             <td className="mono" style={{textAlign:"right"}}>{fmt(repBase.reduce((s,r)=>s+(r.energyBill||0),0))}</td>
-            <td className="mono" style={{textAlign:"right"}}>{fmt(repBase.reduce((s,r)=>s+(r.subtotal||0),0))}</td>
+            <td className="mono" style={{textAlign:"right"}}>{fmt(repBase.reduce((s,r)=>s+(r.ajuste||0),0))}</td>
+            {showAjusteDesc&&<td></td>}
             <td className="mono" style={{textAlign:"right",color:"var(--accent)"}}>{fmt(repBase.reduce((s,r)=>s+(r.total||0),0))}</td>
           </tr>
         </tbody>
@@ -3702,7 +3822,7 @@ export default function App() {
         </div>
       </div>
       <div className="main">
-        {page==="dashboard"&&<Dashboard pdvs={pdvs} results={results} period={period} activePeriod={activePeriod}
+        {page==="dashboard"&&<Dashboard pdvs={pdvs} results={results} period={period} activePeriod={activePeriod} md={md}
           allPeriods={allPeriods} revUuidMap={revUuidMap} userRole={userRole} onSelectPeriod={handleSelectPeriod}
           onLoadPeriodResults={async(pid)=>{
             const res=await SB.loadResults(pid,revUuidMap);
