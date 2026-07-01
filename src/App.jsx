@@ -736,7 +736,6 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   const [repDay,setRepDay]=useState("todos"); // filtro GLOBAL de dia: "todos" | "20" | "3"
   // Construtor de filtros componível
   const [filterConds,setFilterConds]=useState([]); // [{field,op,val}]
-  const [filterLogic,setFilterLogic]=useState("AND"); // "AND" | "OR"
   const [dashNewField,setDashNewField]=useState({field:"energia",op:">",val:""}); // condição em construção
   const [mcrList,setMcrList]=useState([]); // [{vmpay_id,nome}]
   const mcrSet=new Set((mcrList||[]).map(m=>String(m.vmpay_id)));
@@ -1055,11 +1054,19 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     }
   }
   // Combina as condições com E/OU (filterLogic).
+  // Cada condição (a partir da 2ª) carrega seu próprio conector c.conn ("AND"|"OR").
+  // Precedência: E liga mais forte que OU. Então quebramos em grupos separados pelos "OR";
+  // dentro de cada grupo as condições são ligadas por "AND"; o resultado é OR dos grupos.
+  // Ex.: A E B OU C  →  (A E B) OU C
   function passRep(r){
     if(!filterConds.length)return true;
-    return filterLogic==="AND"
-      ? filterConds.every(c=>evalCond(r,c))
-      : filterConds.some(c=>evalCond(r,c));
+    const groups=[]; let cur=[];
+    filterConds.forEach((c,i)=>{
+      if(i>0 && c.conn==="OR"){groups.push(cur);cur=[];}
+      cur.push(c);
+    });
+    if(cur.length)groups.push(cur);
+    return groups.some(g=>g.every(c=>evalCond(r,c)));
   }
   // Mostra a coluna de descrição do ajuste se algum filtro de ajuste "com" estiver ativo.
   const showAjusteDesc=filterConds.some(c=>c.field==="ajuste"&&c.val==="com");
@@ -1087,7 +1094,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
     ws['!freeze']={xSplit:0,ySplit:1};
     const wb=XLSX.utils.book_new();
     const diaLabel=repDay==="todos"?"todos":("dia"+repDay);
-    const recorteLabel={nenhum:"geral",repasse1000:"repasse_acima_1000",medidor1000:"medidor_acima_1000",bruto:"bruto",liquido:"liquido"}[repFilter]||"geral";
+    const recorteLabel=filterConds.length>0?`${filterConds.length}filtros`:"geral";
     XLSX.utils.book_append_sheet(wb,ws,"Demonstrativo");
     const safePeriod=(period||"periodo").replace(/[^\w]+/g,"_");
     XLSX.writeFile(wb,`demonstrativo_${safePeriod}_${diaLabel}_${recorteLabel}.xlsx`);
@@ -1362,29 +1369,34 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
               onClick={()=>{
                 if(kind==="num"&&nf.val==="")return;
                 if(kind!=="num"&&!nf.val)return;
-                setFilterConds(cs=>[...cs,{field:nf.field,op:nf.op,val:kind==="num"?Number(nf.val):nf.val,label:meta[1]}]);
+                setFilterConds(cs=>[...cs,{field:nf.field,op:nf.op,val:kind==="num"?Number(nf.val):nf.val,label:meta[1],conn:"AND"}]);
                 setNf(n=>({...n,val:""}));
               }}>+ Adicionar</button>
           </div>
 
-          {/* Condições ativas */}
+          {/* Condições ativas com conector E/OU entre cada uma */}
           {filterConds.length>0&&<div style={{marginTop:10,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-            <div style={{display:"inline-flex",borderRadius:6,overflow:"hidden",border:"1px solid var(--color-border-tertiary)",marginRight:4}}>
-              {["AND","OR"].map(l=><div key={l} onClick={()=>setFilterLogic(l)}
-                style={{padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700,
-                  background:filterLogic===l?"var(--accent)":"#fff",color:filterLogic===l?"#fff":"var(--color-text-secondary)"}}>
-                {l==="AND"?"E (todas)":"OU (qualquer)"}</div>)}
-            </div>
             {filterConds.map((c,i)=>{
               const opTxt=["energia","kwh","repasse","faturamento","consumo","minimo"].includes(c.field)?` ${c.op} ${c.val}`:
                 c.field==="ajuste"?(c.val==="com"?": com":": sem"):
                 c.field==="mcr"?(c.val==="sim"?": sim":": não"):`: ${c.val}`;
-              return <span key={i} style={{fontSize:11,background:"var(--accent-bg)",color:"var(--accent)",padding:"4px 8px",borderRadius:14,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6}}>
-                {c.label}{opTxt}
-                <span onClick={()=>setFilterConds(cs=>cs.filter((_,j)=>j!==i))} style={{cursor:"pointer",fontWeight:800}}>×</span>
+              return <span key={i} style={{display:"inline-flex",alignItems:"center",gap:6}}>
+                {/* Conector clicável antes de cada condição (menos a primeira) */}
+                {i>0&&<span onClick={()=>setFilterConds(cs=>cs.map((x,j)=>j===i?{...x,conn:x.conn==="OR"?"AND":"OR"}:x))}
+                  title="Clique para alternar E / OU"
+                  style={{cursor:"pointer",fontSize:11,fontWeight:800,padding:"3px 9px",borderRadius:6,
+                    background:c.conn==="OR"?"#fde68a":"var(--accent)",color:c.conn==="OR"?"#92400e":"#fff",userSelect:"none"}}>
+                  {c.conn==="OR"?"OU":"E"}</span>}
+                <span style={{fontSize:11,background:"var(--accent-bg)",color:"var(--accent)",padding:"4px 8px",borderRadius:14,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6}}>
+                  {c.label}{opTxt}
+                  <span onClick={()=>setFilterConds(cs=>cs.filter((_,j)=>j!==i))} style={{cursor:"pointer",fontWeight:800}}>×</span>
+                </span>
               </span>;
             })}
-            <button className="btn btn-s" style={{fontSize:11,padding:"3px 10px"}} onClick={()=>setFilterConds([])}>Limpar tudo</button>
+            <button className="btn btn-s" style={{fontSize:11,padding:"3px 10px",marginLeft:4}} onClick={()=>setFilterConds([])}>Limpar tudo</button>
+          </div>}
+          {filterConds.length>1&&<div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:6}}>
+            Dica: clique no <b>E</b> / <b>OU</b> entre os filtros para alternar. O <b>E</b> tem prioridade sobre o <b>OU</b> (ex.: A E B OU C = (A E B) OU C).
           </div>}
         </div>;
       })()}
