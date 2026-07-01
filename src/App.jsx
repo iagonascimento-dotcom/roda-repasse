@@ -14,6 +14,10 @@ const LIQ = 0.87;
 /* ─── Supabase REST adapter ─── */
 const SB_URL = "https://nssjemcdifdkxfhzukmz.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zc2plbWNkaWZka3hmaHp1a216Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MjAxNzcsImV4cCI6MjA5NTM5NjE3N30.HYHSc7xaQgKzLGkDqJ3uOdOYHRzaaRLrGLu21ceOdhY";
+// URL pública do app (GitHub Pages). Usada como destino fixo do link de recuperação de senha,
+// para não depender de window.location (que pode variar conforme onde o usuário clicou).
+const APP_URL = "https://iagonascimento-dotcom.github.io/roda-repasse/";
+
 
 const SB = {
   token: null,
@@ -646,8 +650,9 @@ function LoginScreen({onAuth}){
           setErr("");setMsg("");setLoading(true);
           try{
             // redireciona de volta para o app publicado (base do site, respeita o caminho do GitHub Pages)
-            const redir=window.location.origin+window.location.pathname;
-            await SB.resetPasswordForEmail(email,redir);
+            // Destino fixo (APP_URL) para o link do e-mail apontar sempre ao app publicado,
+            // independente de onde o usuário esteja ao clicar em "Esqueci minha senha".
+            await SB.resetPasswordForEmail(email,APP_URL);
             setMsg("Se este email estiver cadastrado, você receberá um link para redefinir a senha. Verifique também o spam.");
           }catch(e){setErr(e.message||"Erro ao enviar email de recuperação.");}
           finally{setLoading(false);}
