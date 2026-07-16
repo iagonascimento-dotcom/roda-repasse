@@ -3783,14 +3783,61 @@ export default function App() {
   // No-op save for read-only roles
   const noSave=()=>{};
 
+  // Copia o medidor FIM de `prevPeriod` para o medidor INÍCIO de `newPeriodId`.
+  // O medidor é cumulativo: a leitura final de um ciclo é a inicial do seguinte.
+  // Retorna o objeto md resultante (para popular a tela) ou {} se nada foi herdado.
+  async function carryMeters(prevPeriod,newPeriodId){
+    if(!prevPeriod?.id||!newPeriodId)return {};
+    const prevMd=await SB.loadMonthlyData(prevPeriod.id,revUuidMap);
+    const records=[];const carried={};
+    Object.entries(prevMd||{}).forEach(([pid,d])=>{
+      const fim=Number(d.meter_end)||0;
+      if(fim>0){
+        const puuid=uuidMap[pid];
+        if(puuid){
+          const row={meter_start:fim,meter_end:0,raw_revenue:0,
+            manual_adjustment:0,energy_bill_cond:0};
+          records.push({pdvUuid:puuid,data:row});
+          carried[pid]=row;
+        }
+      }
+    });
+    if(records.length>0) await SB.bulkUpsertMonthly(newPeriodId,records);
+    return carried;
+  }
+
   async function handleCreatePeriod(nome,mes,ano){
     try{
       const p=await SB.createPeriod(nome,mes,ano);
       const newPeriods=await SB.loadPeriods();
       setAllPeriods(newPeriods);
       const created=newPeriods.find(x=>x.nome===nome)||p;
-      setActivePeriod(created);setMd({});setResults([]);
-      audit("Criou período",{entidade:"Período",entidade_nome:nome,periodo_nome:nome});
+
+      // Herda automaticamente os medidores do período imediatamente anterior.
+      let carried={};
+      try{
+        const key=(x)=>x.ano*12+x.mes;
+        const k=ano*12+mes;
+        const prev=newPeriods
+          .filter(x=>x.id!==created.id && key(x)<k)
+          .sort((a,b)=>key(b)-key(a))[0];
+        if(prev){
+          carried=await carryMeters(prev,created.id);
+          const n=Object.keys(carried).length;
+          if(n>0){
+            audit("Criou período",{entidade:"Período",entidade_nome:nome,periodo_nome:nome,
+              descricao:`Medidores iniciais herdados de ${prev.nome}: ${n} PDV(s)`});
+            alert(`Período "${nome}" criado.\n\n✓ ${n} medidor(es) inicial(is) preenchido(s) automaticamente com a leitura final de "${prev.nome}".`);
+          }
+        }
+      }catch(e){
+        console.error("Erro ao herdar medidores:",e);
+        alert("Período criado, mas não foi possível herdar os medidores do período anterior: "+e.message);
+      }
+
+      setActivePeriod(created);setMd(carried);setResults([]);
+      if(Object.keys(carried).length===0)
+        audit("Criou período",{entidade:"Período",entidade_nome:nome,periodo_nome:nome});
     }catch(e){alert("Erro ao criar período: "+e.message);}
   }
 
@@ -3813,6 +3860,7 @@ export default function App() {
       await SB.updatePeriod(id,fields);
       let newPeriods=await SB.loadPeriods();
       let nextCreated=null;
+      let nextCarried={};
       // Auto-create next period when closing
       if(fields.status==="fechado"&&p){
         const nextMes=p.mes===12?1:p.mes+1;
@@ -3825,14 +3873,22 @@ export default function App() {
             await SB.createPeriod(nextNome,nextMes,nextAno);
             newPeriods=await SB.loadPeriods();
             nextCreated=newPeriods.find(x=>x.mes===nextMes&&x.ano===nextAno);
-            audit("Criou período",{entidade:"Período",entidade_nome:nextNome,periodo_nome:nextNome,descricao:"Criado automaticamente após fechamento do período anterior"});
+            // Herda os medidores do período que acabou de fechar (fim → início).
+            let herdados=0;
+            try{
+              nextCarried=await carryMeters(p,nextCreated?.id);
+              herdados=Object.keys(nextCarried).length;
+            }catch(e){console.error("Erro ao herdar medidores no auto-create:",e);}
+            audit("Criou período",{entidade:"Período",entidade_nome:nextNome,periodo_nome:nextNome,
+              descricao:`Criado automaticamente após fechamento do período anterior`+
+                (herdados>0?` — ${herdados} medidor(es) inicial(is) herdado(s) de ${p.nome}`:"")});
           }catch(e){console.error("Auto-create next period failed:",e);}
         }
       }
       setAllPeriods(newPeriods);
       // If we just closed the current active period and a next was created, switch to it
       if(activePeriod?.id===id){
-        if(nextCreated){setActivePeriod(nextCreated);setMd({});setResults([]);}
+        if(nextCreated){setActivePeriod(nextCreated);setMd(nextCarried);setResults([]);}
         else{setActivePeriod(newPeriods.find(x=>x.id===id));}
       }
       let acao="Atualizou período";
