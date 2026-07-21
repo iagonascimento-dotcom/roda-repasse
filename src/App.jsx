@@ -15,18 +15,42 @@ const LIQ = 0.87;
    key: id da página · ic: ícone · lb: label · roles: quem vê.
    O admin organiza estas páginas em grupos (menu_config), mas não cria páginas novas. */
 const PAGE_REGISTRY = [
-  ["dashboard","◫","Dashboard",["master","admin","usuario","view"]],
-  ["admin","⚙","Administração",["master"]],
-  ["historico","⏱","Histórico de Período",["master","admin","usuario","view"]],
-  ["pdvs","⊞","Cadastro PDVs",["master","admin","usuario"]],
-  ["conferencia","📋","Conferência PDVs",["master","admin"]],
-  ["entrada","⇥","Entrada dados",["master","admin"]],
-  ["calcular","≡","Calcular",["master","admin"]],
-  ["demo","☷","Demonstrativo",["master","admin","usuario"]],
-  ["fin","$","Financeiro",["master","admin"]],
-  ["disparo","✉","Disparo E-mail",["master","admin"]],
+  ["dashboard","layout-dashboard","Dashboard",["master","admin","usuario","view"]],
+  ["admin","shield","Administração",["master"]],
+  ["historico","history","Histórico de Período",["master","admin","usuario","view"]],
+  ["pdvs","store","Cadastro PDVs",["master","admin","usuario"]],
+  ["conferencia","clipboard-check","Conferência PDVs",["master","admin"]],
+  ["entrada","keyboard","Entrada dados",["master","admin"]],
+  ["calcular","calculator","Calcular",["master","admin"]],
+  ["demo","receipt","Demonstrativo",["master","admin","usuario"]],
+  ["fin","wallet","Financeiro",["master","admin"]],
+  ["disparo","mail","Disparo E-mail",["master","admin"]],
 ];
 const PAGE_MAP = Object.fromEntries(PAGE_REGISTRY.map(p=>[p[0],{ic:p[1],lb:p[2],roles:p[3]}]));
+
+/* ─── Ícones do menu — Lucide (licença ISC · https://lucide.dev). Conjunto de traço único,
+   harmonioso e legível mesmo pequeno. Cada valor é o interior do SVG 24×24; o componente
+   Icon aplica o wrapper e a cor (currentColor, herda do texto). ─── */
+const ICONS={
+  "layout-dashboard":`<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>`,
+  shield:`<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>`,
+  history:`<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>`,
+  store:`<path d="M15 21v-5a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v5"/><path d="M17.774 10.31a1.12 1.12 0 0 0-1.549 0 2.5 2.5 0 0 1-3.451 0 1.12 1.12 0 0 0-1.548 0 2.5 2.5 0 0 1-3.452 0 1.12 1.12 0 0 0-1.549 0 2.5 2.5 0 0 1-3.77-3.248l2.889-4.184A2 2 0 0 1 7 2h10a2 2 0 0 1 1.653.873l2.895 4.192a2.5 2.5 0 0 1-3.774 3.244"/><path d="M4 10.95V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8.05"/>`,
+  "clipboard-check":`<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/>`,
+  keyboard:`<path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/>`,
+  calculator:`<rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/>`,
+  receipt:`<path d="M12 17V7"/><path d="M16 8h-6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H8"/><path d="M4 3a1 1 0 0 1 1-1 1.3 1.3 0 0 1 .7.2l.933.6a1.3 1.3 0 0 0 1.4 0l.934-.6a1.3 1.3 0 0 1 1.4 0l.933.6a1.3 1.3 0 0 0 1.4 0l.933-.6a1.3 1.3 0 0 1 1.4 0l.934.6a1.3 1.3 0 0 0 1.4 0l.933-.6A1.3 1.3 0 0 1 19 2a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1 1.3 1.3 0 0 1-.7-.2l-.933-.6a1.3 1.3 0 0 0-1.4 0l-.934.6a1.3 1.3 0 0 1-1.4 0l-.933-.6a1.3 1.3 0 0 0-1.4 0l-.933.6a1.3 1.3 0 0 1-1.4 0l-.934-.6a1.3 1.3 0 0 0-1.4 0l-.933.6a1.3 1.3 0 0 1-.7.2 1 1 0 0 1-1-1z"/>`,
+  wallet:`<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>`,
+  mail:`<path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7"/><rect x="2" y="4" width="20" height="16" rx="2"/>`,
+  folder:`<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>`,
+};
+function Icon({name,size=18,style}){
+  const inner=ICONS[name];
+  if(!inner)return null;
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+    style={{flexShrink:0,display:"block",...style}} dangerouslySetInnerHTML={{__html:inner}}/>;
+}
 
 // Estrutura padrão do menu (usada quando o admin ainda não configurou nada).
 // Grupos com filhos que expandem/recolhem. Itens fora de grupo aparecem soltos.
@@ -2788,78 +2812,31 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
 }
 
 /* ─── Editor de Menu (Master): organiza páginas em grupos e ordena, para todos ─── */
-/* Ícones disponíveis para grupos do menu, cada um com nome legível
-   (evita o antigo seletor que mostrava só o ícone, sem nome). */
-const ICON_NAMED=[
-  ["📁","Pasta"],["📂","Pasta aberta"],["📄","Documento"],["📋","Prancheta"],
-  ["🗂","Arquivos"],["🏷","Etiqueta"],["◫","Painel"],["📊","Gráfico"],
-  ["💰","Financeiro"],["✉","E-mail"],["⚙","Configuração"],["🔧","Ferramenta"],
-  ["🧭","Bússola"],["⭐","Destaque"],
-];
-
-/* Seletor de ícone em popover, mostrando ícone + nome. */
-function IconPicker({value,onChange}){
-  const [open,setOpen]=useState(false);
-  const ref=useRef(null);
-  useEffect(()=>{
-    if(!open)return;
-    const h=(e)=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
-    document.addEventListener("mousedown",h);
-    return ()=>document.removeEventListener("mousedown",h);
-  },[open]);
-  const cur=ICON_NAMED.find(o=>o[0]===value);
-  return <div ref={ref} style={{position:"relative"}}>
-    <button type="button" className="btn btn-s" onClick={()=>setOpen(o=>!o)} title="Escolher ícone do grupo"
-      style={{display:"flex",alignItems:"center",gap:7,padding:"7px 10px"}}>
-      <span style={{fontSize:16,lineHeight:1}}>{value}</span>
-      <span style={{fontSize:11,color:"var(--color-text-secondary,#6b6b6b)"}}>{cur?cur[1]:"Ícone"}</span>
-      <span style={{fontSize:9,opacity:0.55}}>▾</span>
-    </button>
-    {open&&<div style={{position:"absolute",zIndex:30,top:"calc(100% + 4px)",left:0,width:280,
-      background:"var(--color-background-primary,#fff)",border:"1px solid var(--color-border-tertiary,#e5e5e3)",
-      borderRadius:10,padding:8,boxShadow:"0 10px 30px rgba(0,0,0,0.14)",
-      display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
-      {ICON_NAMED.map(([ic,nm])=>
-        <button type="button" key={ic} onClick={()=>{onChange(ic);setOpen(false);}}
-          style={{display:"flex",alignItems:"center",gap:8,padding:"7px 9px",borderRadius:7,cursor:"pointer",
-            fontSize:12,fontFamily:"inherit",textAlign:"left",color:"var(--color-text-primary,#1a1a1a)",
-            border:"1px solid "+(ic===value?"var(--accent)":"transparent"),
-            background:ic===value?"var(--accent-bg)":"transparent"}}>
-          <span style={{fontSize:17,lineHeight:1}}>{ic}</span><span>{nm}</span>
-        </button>)}
-    </div>}
-  </div>;
-}
-
-/* Prévia ao vivo do menu lateral — mostra ícone + nome, como os usuários vão ver. */
+/* Prévia ao vivo do menu lateral — mostra como os usuários vão ver (menu em texto, sem ícones). */
 function MenuPreview({cfg}){
   const nodes=[];
   cfg.forEach((node,i)=>{
     if(node.type==="item"){
       const p=PAGE_MAP[node.page];if(!p)return;
-      nodes.push(<div key={"i"+i} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 14px",fontSize:13,color:"rgba(255,255,255,0.85)"}}>
-        <span style={{fontSize:15,width:18,textAlign:"center"}}>{p.ic}</span><span>{p.lb}</span>
-      </div>);
+      nodes.push(<div key={"i"+i} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 16px",fontSize:13,color:"rgba(255,255,255,0.85)"}}><Icon name={p.ic} size={17}/><span>{p.lb}</span></div>);
     }else{
       const kids=(node.children||[]).map(ck=>PAGE_MAP[ck]?[ck,PAGE_MAP[ck]]:null).filter(Boolean);
       if(!kids.length)return;
       nodes.push(<div key={"g"+i}>
-        <div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 14px",marginTop:4,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
-          <span style={{fontSize:13,width:18,textAlign:"center"}}>{node.icon||"📁"}</span>
-          <span style={{flex:1,fontSize:11,fontWeight:700,letterSpacing:"0.5px",textTransform:"uppercase",color:"rgba(255,255,255,0.6)"}}>{node.label||"Grupo"}</span>
+        <div style={{display:"flex",alignItems:"center",gap:9,padding:"9px 16px",marginTop:4,borderTop:"1px solid rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.6)"}}>
+          <Icon name="folder" size={15}/>
+          <span style={{flex:1,fontSize:11,fontWeight:700,letterSpacing:"0.5px",textTransform:"uppercase"}}>{node.label||"Grupo"}</span>
           <span style={{fontSize:9,opacity:0.6}}>▼</span>
         </div>
         {kids.map(([ck,p])=>
-          <div key={ck} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px 8px 30px",fontSize:12,color:"rgba(255,255,255,0.8)"}}>
-            <span style={{fontSize:13,width:16,textAlign:"center",opacity:0.85}}>{p.ic}</span><span>{p.lb}</span>
-          </div>)}
+          <div key={ck} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 16px 8px 28px",fontSize:12,color:"rgba(255,255,255,0.8)"}}><Icon name={p.ic} size={16}/><span>{p.lb}</span></div>)}
       </div>);
     }
   });
   return <div>
     <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.5px",color:"var(--color-text-tertiary,#999)",marginBottom:8}}>Prévia do menu</div>
     <div style={{background:"#00314f",borderRadius:12,padding:"10px 0 14px",overflow:"hidden",boxShadow:"0 6px 20px rgba(0,49,79,0.18)"}}>
-      <div style={{padding:"4px 14px 10px",color:"rgba(255,255,255,0.45)",fontSize:11,fontWeight:600,letterSpacing:"2px",textTransform:"uppercase",borderBottom:"1px solid rgba(255,255,255,0.12)",marginBottom:4}}>Roda · repasse</div>
+      <div style={{padding:"4px 16px 10px",color:"rgba(255,255,255,0.45)",fontSize:11,fontWeight:600,letterSpacing:"2px",textTransform:"uppercase",borderBottom:"1px solid rgba(255,255,255,0.12)",marginBottom:4}}>Roda · repasse</div>
       {nodes.length?nodes:<div style={{padding:14,color:"rgba(255,255,255,0.4)",fontSize:12}}>Menu vazio</div>}
     </div>
     <div style={{fontSize:11,color:"var(--color-text-tertiary,#999)",marginTop:8,lineHeight:1.5}}>
@@ -2896,7 +2873,7 @@ function MenuEditor({userRole}){
     const c=[...cfg];c.splice(i,1);up(c);
   }
   function addGroup(){
-    up([...cfg,{type:"group",label:"Novo grupo",icon:"📁",children:[]}]);
+    up([...cfg,{type:"group",label:"Novo grupo",children:[]}]);
   }
   function addItemNode(pageKey){
     up([...cfg,{type:"item",page:pageKey}]);
@@ -2954,9 +2931,9 @@ function MenuEditor({userRole}){
     </div>
 
     <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
-      <button className="btn btn-p" onClick={salvar} disabled={saving}>{saving?"Salvando…":"💾 Salvar menu"}</button>
-      <button className="btn btn-s" onClick={addGroup}>➕ Novo grupo</button>
-      <button className="btn btn-s" onClick={restaurarPadrao}>↺ Restaurar padrão</button>
+      <button className="btn btn-p" onClick={salvar} disabled={saving}>{saving?"Salvando…":"Salvar menu"}</button>
+      <button className="btn btn-s" onClick={addGroup}>Novo grupo</button>
+      <button className="btn btn-s" onClick={restaurarPadrao}>Restaurar padrão</button>
       {msg&&<span style={{fontSize:12,color:msg.startsWith("Erro")?"var(--red)":"var(--accent)",fontWeight:600}}>{msg}</span>}
     </div>
 
@@ -2978,13 +2955,13 @@ function MenuEditor({userRole}){
                 <button className="btn btn-s" style={{padding:"1px 8px",fontSize:11,lineHeight:1.4}} onClick={()=>moveNode(i,1)} disabled={i===cfg.length-1} title="Descer">▼</button>
               </div>
               {isGroup?<>
-                <IconPicker value={node.icon||"📁"} onChange={ic=>setGroupField(i,"icon",ic)}/>
+                <Icon name="folder" size={18} style={{color:"var(--accent)"}}/>
                 <input value={node.label} onChange={e=>setGroupField(i,"label",e.target.value)} placeholder="Nome do grupo"
                   style={{flex:1,minWidth:100,fontSize:13,fontWeight:600,padding:"8px 10px",borderRadius:7,border:"1px solid var(--color-border-tertiary,#e5e5e3)"}}/>
                 <span className="badge badge-info">Grupo</span>
                 <button className="btn btn-d" style={{fontSize:11,padding:"6px 10px"}} onClick={()=>removeNode(i)} title="Remover grupo — as páginas voltam para “fora do menu”">Remover</button>
               </>:<>
-                <span style={{fontSize:17,width:22,textAlign:"center"}}>{PAGE_MAP[node.page]?.ic}</span>
+                <Icon name={PAGE_MAP[node.page]?.ic} size={18} style={{color:"var(--accent)"}}/>
                 <span style={{fontWeight:600,flex:1,fontSize:13}}>{PAGE_MAP[node.page]?.lb||node.page}</span>
                 <span className="chip">Item solto</span>
                 {groupList.length>0&&<select value="" onChange={e=>{if(e.target.value!=="")looseToGroup(i,Number(e.target.value));}}
@@ -3007,7 +2984,7 @@ function MenuEditor({userRole}){
                       <button className="btn btn-s" style={{padding:"0px 6px",fontSize:9,lineHeight:1.3}} onClick={()=>moveChild(i,ci,-1)} disabled={ci===0} title="Subir">▲</button>
                       <button className="btn btn-s" style={{padding:"0px 6px",fontSize:9,lineHeight:1.3}} onClick={()=>moveChild(i,ci,1)} disabled={ci===node.children.length-1} title="Descer">▼</button>
                     </div>
-                    <span style={{fontSize:15,width:20,textAlign:"center"}}>{p?.ic}</span>
+                    <Icon name={p?.ic} size={16} style={{color:"var(--accent)"}}/>
                     <span style={{flex:1,fontSize:13}}>{p?.lb||ck}</span>
                     <select value="" onChange={e=>{const v=e.target.value;if(v==="")return;v==="loose"?relocateChild(i,ci,{loose:true}):relocateChild(i,ci,{group:Number(v)});}}
                       style={{width:"auto",fontSize:11,padding:"5px 8px",borderRadius:7}} title="Mover esta página">
@@ -3020,8 +2997,8 @@ function MenuEditor({userRole}){
                 })}
                 {disponiveis.length>0&&<select value="" onChange={e=>{if(e.target.value)addChild(i,e.target.value);}}
                   style={{marginTop:6,fontSize:12,padding:"7px 9px",borderRadius:7,width:"auto",maxWidth:"100%"}}>
-                  <option value="">➕ Adicionar página a este grupo…</option>
-                  {disponiveis.map(([k,ic,lb])=><option key={k} value={k}>{ic} {lb}</option>)}
+                  <option value="">Adicionar página a este grupo…</option>
+                  {disponiveis.map(([k,,lb])=><option key={k} value={k}>{lb}</option>)}
                 </select>}
               </div>
             </div>}
@@ -3032,13 +3009,13 @@ function MenuEditor({userRole}){
         <div style={{marginTop:6,padding:14,border:"1px dashed var(--color-border-tertiary,#e5e5e3)",borderRadius:12,background:"var(--color-background-primary,#fff)"}}>
           <div style={{fontSize:12,fontWeight:700,marginBottom:4}}>Páginas fora do menu{disponiveis.length>0?` (${disponiveis.length})`:""}</div>
           {disponiveis.length===0
-            ? <div style={{fontSize:12,color:"var(--color-text-tertiary,#999)"}}>Todas as páginas já estão no menu. 🎉</div>
+            ? <div style={{fontSize:12,color:"var(--color-text-tertiary,#999)"}}>Todas as páginas já estão no menu.</div>
             : <>
               <div style={{fontSize:11,color:"var(--color-text-tertiary,#999)",marginBottom:10}}>Clique no nome para adicionar como item solto, ou use “+ grupo” para jogar direto em um grupo.</div>
               <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                 {disponiveis.map(([k,ic,lb])=>
                   <div key={k} style={{display:"flex",alignItems:"stretch",border:"1px solid var(--color-border-tertiary,#e5e5e3)",borderRadius:8,overflow:"hidden"}}>
-                    <button className="btn btn-s" style={{fontSize:12,border:"none",borderRadius:0}} onClick={()=>addItemNode(k)} title="Adicionar como item solto">{ic} {lb}</button>
+                    <button className="btn btn-s" style={{display:"flex",alignItems:"center",gap:6,fontSize:12,border:"none",borderRadius:0}} onClick={()=>addItemNode(k)} title="Adicionar como item solto"><Icon name={ic} size={15} style={{color:"var(--accent)"}}/>{lb}</button>
                     {groupList.length>0&&<select value="" onChange={e=>{if(e.target.value!=="")addChild(Number(e.target.value),k);}}
                       style={{width:"auto",fontSize:11,padding:"6px 6px",borderRadius:0,borderLeft:"1px solid var(--color-border-tertiary,#e5e5e3)"}} title="Adicionar a um grupo">
                       <option value="">+ grupo</option>
@@ -4425,7 +4402,7 @@ export default function App() {
       if(canSee(node.page)) builtMenu.push({kind:"item",page:node.page});
     }else if(node.type==="group"){
       const kids=(node.children||[]).filter(canSee);
-      if(kids.length>0) builtMenu.push({kind:"group",id:`g${idx}`,label:node.label||"Grupo",icon:node.icon||"📁",children:kids});
+      if(kids.length>0) builtMenu.push({kind:"group",id:`g${idx}`,label:node.label||"Grupo",children:kids});
     }
   });
   // Fallback: qualquer página visível que não esteja na config aparece solta no fim (nunca some).
@@ -4455,7 +4432,7 @@ export default function App() {
             const p=PAGE_MAP[node.page];if(!p)return null;
             return <div key={node.page} className={`nav-item ${page===node.page?"active":""}`} onClick={()=>tryNavigate(node.page)}
               title={sidebarCollapsed?p.lb:""}>
-              <span style={{fontSize:15,width:18,textAlign:"center",flexShrink:0}}>{p.ic}</span>
+              <Icon name={p.ic} size={18}/>
               <span className="nav-item-label">{p.lb}</span>
             </div>;
           }
@@ -4463,12 +4440,12 @@ export default function App() {
           const isOpen=expandedGroups[node.id]!==false; // aberto por padrão
           const hasActiveChild=node.children.includes(page);
           if(sidebarCollapsed){
-            // Recolhido: mostra só os ícones dos filhos, sem cabeçalho de grupo
+            // Recolhido: mostra a inicial de cada página do grupo, sem cabeçalho
             return <Fragment key={node.id}>
               <div className="nav-sep" style={{height:1,background:"rgba(255,255,255,0.08)",margin:"8px 12px"}}/>
               {node.children.map(ck=>{const p=PAGE_MAP[ck];if(!p)return null;
                 return <div key={ck} className={`nav-item ${page===ck?"active":""}`} onClick={()=>tryNavigate(ck)} title={p.lb}>
-                  <span style={{fontSize:15,width:18,textAlign:"center",flexShrink:0}}>{p.ic}</span>
+                  <Icon name={p.ic} size={18}/>
                   <span className="nav-item-label">{p.lb}</span>
                 </div>;})}
             </Fragment>;
@@ -4476,14 +4453,14 @@ export default function App() {
           return <Fragment key={node.id}>
             <div className="nav-item" onClick={()=>setExpandedGroups(g=>({...g,[node.id]:!isOpen}))}
               style={{opacity:0.9,fontWeight:700,marginTop:6,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
-              <span style={{fontSize:14,width:18,textAlign:"center",flexShrink:0}}>{node.icon}</span>
+              <Icon name="folder" size={15} style={{opacity:0.85}}/>
               <span className="nav-item-label" style={{flex:1,fontSize:11,letterSpacing:"0.5px",textTransform:"uppercase",color:hasActiveChild?"#fff":"rgba(255,255,255,0.6)"}}>{node.label}</span>
               <span style={{fontSize:10,opacity:0.6,transition:"transform 0.2s",transform:isOpen?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
             </div>
             {isOpen&&node.children.map(ck=>{const p=PAGE_MAP[ck];if(!p)return null;
               return <div key={ck} className={`nav-item ${page===ck?"active":""}`} onClick={()=>tryNavigate(ck)}
                 style={{paddingLeft:28}}>
-                <span style={{fontSize:14,width:16,textAlign:"center",flexShrink:0,opacity:0.85}}>{p.ic}</span>
+                <Icon name={p.ic} size={16} style={{opacity:0.9}}/>
                 <span className="nav-item-label" style={{fontSize:13}}>{p.lb}</span>
               </div>;})}
           </Fragment>;
