@@ -11,6 +11,31 @@ const CONTRACT_TYPES = [
 const REV_TYPES = ["Líquido","Bruto"];
 const LIQ = 0.87;
 
+/* ─── Registro central de páginas do menu ───
+   key: id da página · ic: ícone · lb: label · roles: quem vê.
+   O admin organiza estas páginas em grupos (menu_config), mas não cria páginas novas. */
+const PAGE_REGISTRY = [
+  ["dashboard","◫","Dashboard",["master","admin","usuario","view"]],
+  ["admin","⚙","Administração",["master"]],
+  ["historico","⏱","Histórico de Período",["master","admin","usuario","view"]],
+  ["pdvs","⊞","Cadastro PDVs",["master","admin","usuario"]],
+  ["conferencia","📋","Conferência PDVs",["master","admin"]],
+  ["entrada","⇥","Entrada dados",["master","admin"]],
+  ["calcular","≡","Calcular",["master","admin"]],
+  ["demo","☷","Demonstrativo",["master","admin","usuario"]],
+  ["fin","$","Financeiro",["master","admin"]],
+  ["disparo","✉","Disparo E-mail",["master","admin"]],
+];
+const PAGE_MAP = Object.fromEntries(PAGE_REGISTRY.map(p=>[p[0],{ic:p[1],lb:p[2],roles:p[3]}]));
+
+// Estrutura padrão do menu (usada quando o admin ainda não configurou nada).
+// Grupos com filhos que expandem/recolhem. Itens fora de grupo aparecem soltos.
+const DEFAULT_MENU = [
+  {type:"item",page:"dashboard"},
+  {type:"item",page:"admin"},
+  {type:"group",label:"Passo a passo do repasse",icon:"📄",children:["historico","pdvs","conferencia","entrada","calcular","demo","fin","disparo"]},
+];
+
 /* ─── Supabase REST adapter ─── */
 const SB_URL = "https://nssjemcdifdkxfhzukmz.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zc2plbWNkaWZka3hmaHp1a216Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MjAxNzcsImV4cCI6MjA5NTM5NjE3N30.HYHSc7xaQgKzLGkDqJ3uOdOYHRzaaRLrGLu21ceOdhY";
@@ -340,6 +365,17 @@ const SB = {
   async loadSyncLocais(){
     return this.api("/rest/v1/locais?tipo=eq.pdv&select=codigo,local,logradouro,numero,complemento,bairro,cidade,estado&order=local",
       {headers:{"Accept-Profile":"sync"}});
+  },
+
+  /* ─── Configuração do menu (ordenação/grupos, definida pelo admin p/ todos) ─── */
+  async loadMenuConfig(){
+    const r=await this.api("/rest/v1/menu_config?id=eq.1&select=config");
+    return (r&&r[0]&&r[0].config)||[];
+  },
+  async saveMenuConfig(config,byEmail){
+    await this.api("/rest/v1/menu_config?id=eq.1",{method:"PATCH",
+      body:JSON.stringify({config,updated_at:new Date().toISOString(),updated_by:byEmail||""}),
+      headers:{"Prefer":"return=minimal"}});
   },
 
   /* ─── Realtime (native WebSocket, no extra dependency) ─── */
@@ -2751,6 +2787,142 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
   </div>;
 }
 
+/* ─── Editor de Menu (Master): organiza páginas em grupos e ordena, para todos ─── */
+function MenuEditor({userRole}){
+  const [cfg,setCfg]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [msg,setMsg]=useState("");
+
+  useEffect(()=>{(async()=>{
+    try{const c=await SB.loadMenuConfig();setCfg(Array.isArray(c)&&c.length?c:DEFAULT_MENU);}
+    catch(e){console.error(e);setCfg(DEFAULT_MENU);}
+    setLoading(false);
+  })();},[]);
+
+  if(loading||!cfg)return <div className="empty" style={{fontSize:13}}>Carregando menu…</div>;
+
+  // Páginas já colocadas em algum nó
+  const usadas=new Set();
+  cfg.forEach(n=>{if(n.type==="item")usadas.add(n.page);else (n.children||[]).forEach(c=>usadas.add(c));});
+  const disponiveis=PAGE_REGISTRY.filter(([k])=>!usadas.has(k));
+
+  function up(newCfg){setCfg(newCfg);setMsg("");}
+  function moveNode(i,dir){
+    const j=i+dir;if(j<0||j>=cfg.length)return;
+    const c=[...cfg];[c[i],c[j]]=[c[j],c[i]];up(c);
+  }
+  function removeNode(i){
+    const c=[...cfg];c.splice(i,1);up(c);
+  }
+  function addGroup(){
+    up([...cfg,{type:"group",label:"Novo grupo",icon:"📁",children:[]}]);
+  }
+  function addItemNode(pageKey){
+    up([...cfg,{type:"item",page:pageKey}]);
+  }
+  function setGroupField(i,field,val){
+    const c=[...cfg];c[i]={...c[i],[field]:val};up(c);
+  }
+  function addChild(gi,pageKey){
+    const c=[...cfg];const g={...c[gi]};g.children=[...(g.children||[]),pageKey];c[gi]=g;up(c);
+  }
+  function removeChild(gi,ci){
+    const c=[...cfg];const g={...c[gi]};g.children=g.children.filter((_,k)=>k!==ci);c[gi]=g;up(c);
+  }
+  function moveChild(gi,ci,dir){
+    const c=[...cfg];const g={...c[gi]};const kids=[...g.children];const j=ci+dir;
+    if(j<0||j>=kids.length)return;[kids[ci],kids[j]]=[kids[j],kids[ci]];g.children=kids;c[gi]=g;up(c);
+  }
+
+  async function salvar(){
+    setSaving(true);setMsg("");
+    try{await SB.saveMenuConfig(cfg,userRole?.email||"");
+      setMsg("✓ Menu salvo! A mudança vale para todos os usuários (pode ser preciso recarregar a página).");
+    }catch(e){setMsg("Erro ao salvar: "+e.message);}
+    setSaving(false);
+  }
+  function restaurarPadrao(){
+    if(confirm("Restaurar o menu para o padrão? Isso desfaz sua organização atual (só aplica ao salvar)."))
+      up(JSON.parse(JSON.stringify(DEFAULT_MENU)));
+  }
+
+  const ICON_OPTS=["📁","📂","📄","⚙","◫","📋","💰","✉","🔧","⭐","📊","🗂","🧭","🏷"];
+
+  return <div>
+    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>
+      Organize o menu lateral em <b>grupos</b> que expandem e recolhem. Arraste itens para dentro de grupos e defina a ordem com as setas. Esta configuração vale <b>para todos os usuários</b>. Cada item só aparece para quem tem permissão de acesso a ele.
+    </div>
+
+    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+      <button className="btn btn-p" onClick={salvar} disabled={saving}>{saving?"Salvando…":"💾 Salvar menu"}</button>
+      <button className="btn btn-s" onClick={addGroup}>+ Novo grupo</button>
+      <button className="btn btn-s" onClick={restaurarPadrao}>↺ Restaurar padrão</button>
+    </div>
+    {msg&&<div style={{fontSize:12,color:msg.startsWith("Erro")?"#f2401a":"var(--accent)",marginBottom:12,fontWeight:600}}>{msg}</div>}
+
+    {/* Estrutura atual */}
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      {cfg.map((node,i)=>
+        <div key={i} style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:12,background:node.type==="group"?"var(--color-surface-secondary,#f8fafc)":"#fff"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{display:"flex",flexDirection:"column",gap:2}}>
+              <button className="btn btn-s" style={{padding:"1px 7px",fontSize:11}} onClick={()=>moveNode(i,-1)} disabled={i===0}>▲</button>
+              <button className="btn btn-s" style={{padding:"1px 7px",fontSize:11}} onClick={()=>moveNode(i,1)} disabled={i===cfg.length-1}>▼</button>
+            </div>
+            {node.type==="item"?<>
+              <span style={{fontSize:15}}>{PAGE_MAP[node.page]?.ic}</span>
+              <span style={{fontWeight:600,flex:1}}>{PAGE_MAP[node.page]?.lb||node.page} <span style={{fontSize:11,color:"var(--color-text-tertiary)",fontWeight:400}}>(item solto)</span></span>
+              <button className="btn btn-s" style={{fontSize:11,color:"var(--red)"}} onClick={()=>removeNode(i)}>Remover</button>
+            </>:<>
+              <select value={node.icon} onChange={e=>setGroupField(i,"icon",e.target.value)}
+                style={{fontSize:15,padding:"4px 6px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}>
+                {ICON_OPTS.map(ic=><option key={ic} value={ic}>{ic}</option>)}
+              </select>
+              <input value={node.label} onChange={e=>setGroupField(i,"label",e.target.value)}
+                style={{flex:1,fontSize:13,fontWeight:600,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}/>
+              <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>grupo</span>
+              <button className="btn btn-s" style={{fontSize:11,color:"var(--red)"}} onClick={()=>removeNode(i)}>Remover grupo</button>
+            </>}
+          </div>
+
+          {/* Filhos do grupo */}
+          {node.type==="group"&&<div style={{marginTop:10,paddingLeft:16,borderLeft:"2px solid var(--color-border-tertiary)"}}>
+            {(node.children||[]).length===0&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",padding:"4px 0"}}>Nenhuma página neste grupo ainda.</div>}
+            {(node.children||[]).map((ck,ci)=>
+              <div key={ci} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0"}}>
+                <span style={{fontSize:12,color:"var(--color-text-tertiary)",width:18,textAlign:"right"}}>{ci+1}.</span>
+                <div style={{display:"flex",gap:2}}>
+                  <button className="btn btn-s" style={{padding:"0px 6px",fontSize:10}} onClick={()=>moveChild(i,ci,-1)} disabled={ci===0}>▲</button>
+                  <button className="btn btn-s" style={{padding:"0px 6px",fontSize:10}} onClick={()=>moveChild(i,ci,1)} disabled={ci===node.children.length-1}>▼</button>
+                </div>
+                <span style={{fontSize:14}}>{PAGE_MAP[ck]?.ic}</span>
+                <span style={{flex:1,fontSize:13}}>{PAGE_MAP[ck]?.lb||ck}</span>
+                <button className="btn btn-s" style={{fontSize:11,color:"var(--red)"}} onClick={()=>removeChild(i,ci)}>✕</button>
+              </div>
+            )}
+            {disponiveis.length>0&&<select value="" onChange={e=>{if(e.target.value)addChild(i,e.target.value);}}
+              style={{marginTop:6,fontSize:12,padding:"5px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}>
+              <option value="">+ Adicionar página a este grupo…</option>
+              {disponiveis.map(([k,ic,lb])=><option key={k} value={k}>{ic} {lb}</option>)}
+            </select>}
+          </div>}
+        </div>
+      )}
+    </div>
+
+    {/* Páginas ainda não colocadas */}
+    {disponiveis.length>0&&<div style={{marginTop:16,padding:12,border:"1px dashed var(--color-border-tertiary)",borderRadius:10}}>
+      <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Páginas fora do menu ({disponiveis.length})</div>
+      <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:8}}>Adicione como item solto ou dentro de um grupo acima.</div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {disponiveis.map(([k,ic,lb])=>
+          <button key={k} className="btn btn-s" style={{fontSize:12}} onClick={()=>addItemNode(k)}>{ic} {lb} <span style={{opacity:0.6}}>+ solto</span></button>)}
+      </div>
+    </div>}
+  </div>;
+}
+
 /* ─── Admin Panel (Master only) ─── */
 function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
   const [users,setUsers]=useState([]);
@@ -2953,7 +3125,10 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
       </div>
       <div className={`tab ${tab==="perms"?"active":""}`} onClick={()=>setTab("perms")}>Permissões</div>
       <div className={`tab ${tab==="audit"?"active":""}`} onClick={()=>setTab("audit")}>Histórico de edições</div>
+      <div className={`tab ${tab==="menu"?"active":""}`} onClick={()=>setTab("menu")}>Organizar menu</div>
     </div>
+
+    {tab==="menu"&&<MenuEditor userRole={userRole}/>}
 
     {tab==="users"&&<>
       {pendingUsers>0&&<div style={{padding:"10px 14px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",
@@ -3533,6 +3708,13 @@ export default function App() {
     return null;
   });
   const [page,setPage]=useState("dashboard");
+  // Configuração do menu (grupos/ordem) definida pelo admin, e grupos expandidos
+  const [menuConfig,setMenuConfig]=useState(null); // null = ainda carregando; usa DEFAULT se vazio
+  const [expandedGroups,setExpandedGroups]=useState({});
+  useEffect(()=>{(async()=>{
+    try{const c=await SB.loadMenuConfig();setMenuConfig(Array.isArray(c)&&c.length?c:DEFAULT_MENU);}
+    catch(e){console.error("loadMenuConfig",e);setMenuConfig(DEFAULT_MENU);}
+  })();},[]);
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>{
     try{return localStorage.getItem("sidebar-collapsed")==="1";}catch{return false;}
   });
@@ -4098,21 +4280,23 @@ export default function App() {
       </div>
     </div></>;
 
-  // Build nav based on role
-  const allNav=[
-    ["dashboard","◫","Dashboard",["master","admin","usuario","view"]],
-    ["admin","⚙","Administração",["master"]],
-    ["---","","Passo a passo do repasse",["master","admin"]],
-    ["historico","⏱","Histórico de Período",["master","admin","usuario","view"]],
-    ["pdvs","⊞","Cadastro PDVs",["master","admin","usuario"]],
-    ["conferencia","📋","Conferência PDVs",["master","admin"]],
-    ["entrada","⇥","Entrada dados",["master","admin"]],
-    ["calcular","≡","Calcular",["master","admin"]],
-    ["demo","☷","Demonstrativo",["master","admin","usuario"]],
-    ["fin","$","Financeiro",["master","admin"]],
-    ["disparo","✉","Disparo E-mail",["master","admin"]],
-  ];
-  const nav=allNav.filter(([,,, roles])=>roles.includes(role)).map(([k,ic,lb])=>[k,ic,lb]);
+  // Constrói o menu a partir da config (grupos + itens), filtrando por role.
+  // Item só aparece se a role atual tem acesso. Grupo só aparece se tiver ao menos 1 filho visível.
+  const menuCfg=menuConfig||DEFAULT_MENU;
+  const canSee=(pageKey)=>{const p=PAGE_MAP[pageKey];return p&&p.roles.includes(role);};
+  const builtMenu=[];
+  menuCfg.forEach((node,idx)=>{
+    if(node.type==="item"){
+      if(canSee(node.page)) builtMenu.push({kind:"item",page:node.page});
+    }else if(node.type==="group"){
+      const kids=(node.children||[]).filter(canSee);
+      if(kids.length>0) builtMenu.push({kind:"group",id:`g${idx}`,label:node.label||"Grupo",icon:node.icon||"📁",children:kids});
+    }
+  });
+  // Fallback: qualquer página visível que não esteja na config aparece solta no fim (nunca some).
+  const pagesInConfig=new Set();
+  menuCfg.forEach(n=>{if(n.type==="item")pagesInConfig.add(n.page);else (n.children||[]).forEach(c=>pagesInConfig.add(c));});
+  PAGE_REGISTRY.forEach(([key])=>{if(!pagesInConfig.has(key)&&canSee(key))builtMenu.push({kind:"item",page:key});});
 
   return <>
     <style>{css}</style>
@@ -4131,18 +4315,44 @@ export default function App() {
           <img src={LOGO_SVG} alt="Roda" style={{height:sidebarCollapsed?34:120,transition:"height 0.22s ease"}}/>
           {!sidebarCollapsed&&<span style={{fontSize:11,fontWeight:500,letterSpacing:"2px",color:"rgba(255,255,255,0.45)",textTransform:"uppercase"}}>repasse</span>}
         </button>
-        {nav.map(([k,ic,lb],i)=>
-          k==="---"?(sidebarCollapsed?<div key={`div-${i}`} className="nav-sep" style={{height:1,background:"rgba(255,255,255,0.08)",margin:"8px 12px"}}/>
-            :<div key={`div-${i}`} className="nav-sep" style={{padding:"12px 16px 4px",fontSize:9,fontWeight:700,letterSpacing:"1.5px",
-              textTransform:"uppercase",color:"rgba(255,255,255,0.3)",borderTop:"1px solid rgba(255,255,255,0.08)",marginTop:6}}>
-              <span className="nav-sep-label">{lb}</span>
-            </div>)
-          :<div key={k} className={`nav-item ${page===k?"active":""}`} onClick={()=>tryNavigate(k)}
-            title={sidebarCollapsed?lb:""}>
-            <span style={{fontSize:15,width:18,textAlign:"center",flexShrink:0}}>{ic}</span>
-            <span className="nav-item-label">{lb}</span>
-          </div>
-        )}
+        {builtMenu.map((node)=>{
+          if(node.kind==="item"){
+            const p=PAGE_MAP[node.page];if(!p)return null;
+            return <div key={node.page} className={`nav-item ${page===node.page?"active":""}`} onClick={()=>tryNavigate(node.page)}
+              title={sidebarCollapsed?p.lb:""}>
+              <span style={{fontSize:15,width:18,textAlign:"center",flexShrink:0}}>{p.ic}</span>
+              <span className="nav-item-label">{p.lb}</span>
+            </div>;
+          }
+          // Grupo expansível
+          const isOpen=expandedGroups[node.id]!==false; // aberto por padrão
+          const hasActiveChild=node.children.includes(page);
+          if(sidebarCollapsed){
+            // Recolhido: mostra só os ícones dos filhos, sem cabeçalho de grupo
+            return <Fragment key={node.id}>
+              <div className="nav-sep" style={{height:1,background:"rgba(255,255,255,0.08)",margin:"8px 12px"}}/>
+              {node.children.map(ck=>{const p=PAGE_MAP[ck];if(!p)return null;
+                return <div key={ck} className={`nav-item ${page===ck?"active":""}`} onClick={()=>tryNavigate(ck)} title={p.lb}>
+                  <span style={{fontSize:15,width:18,textAlign:"center",flexShrink:0}}>{p.ic}</span>
+                  <span className="nav-item-label">{p.lb}</span>
+                </div>;})}
+            </Fragment>;
+          }
+          return <Fragment key={node.id}>
+            <div className="nav-item" onClick={()=>setExpandedGroups(g=>({...g,[node.id]:!isOpen}))}
+              style={{opacity:0.9,fontWeight:700,marginTop:6,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+              <span style={{fontSize:14,width:18,textAlign:"center",flexShrink:0}}>{node.icon}</span>
+              <span className="nav-item-label" style={{flex:1,fontSize:11,letterSpacing:"0.5px",textTransform:"uppercase",color:hasActiveChild?"#fff":"rgba(255,255,255,0.6)"}}>{node.label}</span>
+              <span style={{fontSize:10,opacity:0.6,transition:"transform 0.2s",transform:isOpen?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+            </div>
+            {isOpen&&node.children.map(ck=>{const p=PAGE_MAP[ck];if(!p)return null;
+              return <div key={ck} className={`nav-item ${page===ck?"active":""}`} onClick={()=>tryNavigate(ck)}
+                style={{paddingLeft:28}}>
+                <span style={{fontSize:14,width:16,textAlign:"center",flexShrink:0,opacity:0.85}}>{p.ic}</span>
+                <span className="nav-item-label" style={{fontSize:13}}>{p.lb}</span>
+              </div>;})}
+          </Fragment>;
+        })}
         <div style={{flex:1}}/>
         <div className="side-footer" style={{padding:"8px 16px",fontSize:10,color:"rgba(255,255,255,0.35)",borderTop:"1px solid rgba(255,255,255,0.1)"}}>
           <div className="side-footer-text">
