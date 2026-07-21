@@ -1653,14 +1653,22 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
     setShowList(false);
   }
 
-  // Lista filtrada pelo texto do campo Nome (nome, código, bairro ou cidade).
+  // Lista do combobox. Sem termo (só abriu) mostra tudo; com termo, filtra.
+  // Ordena: NÃO cadastrados primeiro (disponíveis), depois por nome.
   const termo=String(f.name||"").trim().toLowerCase();
-  const locaisFiltrados=(isEdit||termo.length<2)?[]:syncLocais.filter(l=>
-    (l.local||"").toLowerCase().includes(termo)||
-    String(l.codigo).includes(termo)||
-    (l.bairro||"").toLowerCase().includes(termo)||
-    (l.cidade||"").toLowerCase().includes(termo)
-  ).slice(0,40);
+  const locaisFiltrados=isEdit?[]:(()=>{
+    const base=termo.length<1?syncLocais:syncLocais.filter(l=>
+      (l.local||"").toLowerCase().includes(termo)||
+      String(l.codigo).includes(termo)||
+      (l.bairro||"").toLowerCase().includes(termo)||
+      (l.cidade||"").toLowerCase().includes(termo));
+    return [...base].sort((a,b)=>{
+      const ca=codigosCadastrados.has(String(a.codigo))?1:0;
+      const cb=codigosCadastrados.has(String(b.codigo))?1:0;
+      if(ca!==cb)return ca-cb; // disponíveis (0) antes dos cadastrados (1)
+      return (a.local||"").localeCompare(b.local||"","pt-BR");
+    }).slice(0,200);
+  })();
 
   const bloqueiaSalvar=!isEdit && !!dupWarn;
 
@@ -1677,10 +1685,19 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
       {/* Campo NOME é o combobox: digita, abre a lista da base, escolhe. ID fica oculto. */}
       <Field label="Nome">
         <div ref={nameWrapRef} style={{position:"relative"}}>
-          <input value={f.name} autoComplete="off"
-            placeholder={isEdit?"":"Digite para buscar o local…"}
-            onChange={e=>{s("name",e.target.value); if(!isEdit)setShowList(true);}}
-            onFocus={()=>{if(!isEdit)setShowList(true);}}/>
+          <div style={{position:"relative"}}>
+            <input value={f.name} autoComplete="off"
+              placeholder={isEdit?"":"Clique na seta ou digite para buscar…"}
+              style={!isEdit?{paddingRight:34}:undefined}
+              onChange={e=>{s("name",e.target.value); if(!isEdit)setShowList(true);}}
+              onFocus={()=>{if(!isEdit)setShowList(true);}}/>
+            {!isEdit&&<button type="button" tabIndex={-1}
+              onMouseDown={e=>{e.preventDefault();setShowList(v=>!v);}}
+              title={showList?"Fechar lista":"Ver todos os locais"}
+              style={{position:"absolute",right:4,top:"50%",transform:"translateY(-50%)",
+                border:"none",background:"transparent",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)",
+                padding:"4px 6px",lineHeight:1}}>{showList?"▲":"▼"}</button>}
+          </div>
           {!isEdit&&f.id&&<div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:3}}>
             Código vinculado: <span className="mono" style={{color:"var(--accent)",fontWeight:600}}>{f.id}</span>
           </div>}
