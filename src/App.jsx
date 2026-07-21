@@ -1455,9 +1455,13 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
   const [justify,setJustify]=useState(null);
   // Locais sincronizados (fonte de verdade) para o dropdown do cadastro
   const [syncLocais,setSyncLocais]=useState([]);
+  // Códigos marcados como "não recebe repasse" (Conferência) — saem do dropdown
+  const [ignorados,setIgnorados]=useState(new Set());
   useEffect(()=>{(async()=>{
     try{const l=await SB.loadSyncLocais();setSyncLocais(l||[]);}
     catch(e){console.error("loadSyncLocais",e);}
+    try{const ig=await SB.loadIgnored();setIgnorados(new Set((ig||[]).map(x=>String(x.vmpay_id))));}
+    catch(e){console.error("loadIgnored",e);}
   })();},[]);
   // Conjunto de códigos já cadastrados (para negar duplicado). Exclui o que está sendo editado.
   const codigosCadastrados=new Set(pdvs.map(p=>String(p.id||"").trim()).filter(Boolean));
@@ -1586,7 +1590,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     <input placeholder="Buscar por nome, ID ou tipo..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:14}}/>
     {/* Form de NOVO PDV fica no topo; edição aparece inline na tabela (abaixo da linha) */}
     {showForm&&editing===null&&<PdvForm key={formPdv.id||"new"} pdv={formPdv} onSave={savePdv} onCancel={closeForm}
-      isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} isEdit={false}/>}
+      isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} ignorados={ignorados} isEdit={false}/>}
     <div className="scroll-x">
       <table><thead><tr>
         <th>ID</th><th>Nome</th><th>Contrato</th><th>Receita</th><th>%</th><th>kWh</th><th>Mínimo</th><th></th>
@@ -1611,7 +1615,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
           {isEditingThis&&<tr><td colSpan={8} style={{padding:0,background:"var(--accent-bg)"}}>
             <div style={{padding:"4px 8px 12px"}}>
               <PdvForm key={"edit-"+(p.id||ri)} pdv={pdvs[ri]} onSave={savePdv} onCancel={closeForm}
-                isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} isEdit={true}/>
+                isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} ignorados={ignorados} isEdit={true}/>
             </div>
           </td></tr>}
         </Fragment>;})}
@@ -1621,7 +1625,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
   </div>;
 }
 
-function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados=new Set(),isEdit=false}) {
+function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados=new Set(),ignorados=new Set(),isEdit=false}) {
   const [f,sf]=useState({...pdv});
   const s=(k,v)=>sf(o=>({...o,[k]:v}));
   const [dupWarn,setDupWarn]=useState("");
@@ -1657,7 +1661,9 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
   // Ordena: NÃO cadastrados primeiro (disponíveis), depois por nome.
   const termo=String(f.name||"").trim().toLowerCase();
   const locaisFiltrados=isEdit?[]:(()=>{
-    const base=termo.length<1?syncLocais:syncLocais.filter(l=>
+    // Fonte já exclui os locais marcados como "não recebe repasse" na Conferência.
+    const fonte=syncLocais.filter(l=>!ignorados.has(String(l.codigo)));
+    const base=termo.length<1?fonte:fonte.filter(l=>
       (l.local||"").toLowerCase().includes(termo)||
       String(l.codigo).includes(termo)||
       (l.bairro||"").toLowerCase().includes(termo)||
