@@ -2788,6 +2788,86 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
 }
 
 /* ─── Editor de Menu (Master): organiza páginas em grupos e ordena, para todos ─── */
+/* Ícones disponíveis para grupos do menu, cada um com nome legível
+   (evita o antigo seletor que mostrava só o ícone, sem nome). */
+const ICON_NAMED=[
+  ["📁","Pasta"],["📂","Pasta aberta"],["📄","Documento"],["📋","Prancheta"],
+  ["🗂","Arquivos"],["🏷","Etiqueta"],["◫","Painel"],["📊","Gráfico"],
+  ["💰","Financeiro"],["✉","E-mail"],["⚙","Configuração"],["🔧","Ferramenta"],
+  ["🧭","Bússola"],["⭐","Destaque"],
+];
+
+/* Seletor de ícone em popover, mostrando ícone + nome. */
+function IconPicker({value,onChange}){
+  const [open,setOpen]=useState(false);
+  const ref=useRef(null);
+  useEffect(()=>{
+    if(!open)return;
+    const h=(e)=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",h);
+    return ()=>document.removeEventListener("mousedown",h);
+  },[open]);
+  const cur=ICON_NAMED.find(o=>o[0]===value);
+  return <div ref={ref} style={{position:"relative"}}>
+    <button type="button" className="btn btn-s" onClick={()=>setOpen(o=>!o)} title="Escolher ícone do grupo"
+      style={{display:"flex",alignItems:"center",gap:7,padding:"7px 10px"}}>
+      <span style={{fontSize:16,lineHeight:1}}>{value}</span>
+      <span style={{fontSize:11,color:"var(--color-text-secondary,#6b6b6b)"}}>{cur?cur[1]:"Ícone"}</span>
+      <span style={{fontSize:9,opacity:0.55}}>▾</span>
+    </button>
+    {open&&<div style={{position:"absolute",zIndex:30,top:"calc(100% + 4px)",left:0,width:280,
+      background:"var(--color-background-primary,#fff)",border:"1px solid var(--color-border-tertiary,#e5e5e3)",
+      borderRadius:10,padding:8,boxShadow:"0 10px 30px rgba(0,0,0,0.14)",
+      display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
+      {ICON_NAMED.map(([ic,nm])=>
+        <button type="button" key={ic} onClick={()=>{onChange(ic);setOpen(false);}}
+          style={{display:"flex",alignItems:"center",gap:8,padding:"7px 9px",borderRadius:7,cursor:"pointer",
+            fontSize:12,fontFamily:"inherit",textAlign:"left",color:"var(--color-text-primary,#1a1a1a)",
+            border:"1px solid "+(ic===value?"var(--accent)":"transparent"),
+            background:ic===value?"var(--accent-bg)":"transparent"}}>
+          <span style={{fontSize:17,lineHeight:1}}>{ic}</span><span>{nm}</span>
+        </button>)}
+    </div>}
+  </div>;
+}
+
+/* Prévia ao vivo do menu lateral — mostra ícone + nome, como os usuários vão ver. */
+function MenuPreview({cfg}){
+  const nodes=[];
+  cfg.forEach((node,i)=>{
+    if(node.type==="item"){
+      const p=PAGE_MAP[node.page];if(!p)return;
+      nodes.push(<div key={"i"+i} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 14px",fontSize:13,color:"rgba(255,255,255,0.85)"}}>
+        <span style={{fontSize:15,width:18,textAlign:"center"}}>{p.ic}</span><span>{p.lb}</span>
+      </div>);
+    }else{
+      const kids=(node.children||[]).map(ck=>PAGE_MAP[ck]?[ck,PAGE_MAP[ck]]:null).filter(Boolean);
+      if(!kids.length)return;
+      nodes.push(<div key={"g"+i}>
+        <div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 14px",marginTop:4,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+          <span style={{fontSize:13,width:18,textAlign:"center"}}>{node.icon||"📁"}</span>
+          <span style={{flex:1,fontSize:11,fontWeight:700,letterSpacing:"0.5px",textTransform:"uppercase",color:"rgba(255,255,255,0.6)"}}>{node.label||"Grupo"}</span>
+          <span style={{fontSize:9,opacity:0.6}}>▼</span>
+        </div>
+        {kids.map(([ck,p])=>
+          <div key={ck} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px 8px 30px",fontSize:12,color:"rgba(255,255,255,0.8)"}}>
+            <span style={{fontSize:13,width:16,textAlign:"center",opacity:0.85}}>{p.ic}</span><span>{p.lb}</span>
+          </div>)}
+      </div>);
+    }
+  });
+  return <div>
+    <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.5px",color:"var(--color-text-tertiary,#999)",marginBottom:8}}>Prévia do menu</div>
+    <div style={{background:"#00314f",borderRadius:12,padding:"10px 0 14px",overflow:"hidden",boxShadow:"0 6px 20px rgba(0,49,79,0.18)"}}>
+      <div style={{padding:"4px 14px 10px",color:"rgba(255,255,255,0.45)",fontSize:11,fontWeight:600,letterSpacing:"2px",textTransform:"uppercase",borderBottom:"1px solid rgba(255,255,255,0.12)",marginBottom:4}}>Roda · repasse</div>
+      {nodes.length?nodes:<div style={{padding:14,color:"rgba(255,255,255,0.4)",fontSize:12}}>Menu vazio</div>}
+    </div>
+    <div style={{fontSize:11,color:"var(--color-text-tertiary,#999)",marginTop:8,lineHeight:1.5}}>
+      Cada usuário vê só as páginas que o cargo dele permite. Grupos sem páginas visíveis não aparecem.
+    </div>
+  </div>;
+}
+
 function MenuEditor({userRole}){
   const [cfg,setCfg]=useState(null);
   const [loading,setLoading]=useState(true);
@@ -2834,6 +2914,23 @@ function MenuEditor({userRole}){
     const c=[...cfg];const g={...c[gi]};const kids=[...g.children];const j=ci+dir;
     if(j<0||j>=kids.length)return;[kids[ci],kids[j]]=[kids[j],kids[ci]];g.children=kids;c[gi]=g;up(c);
   }
+  // Move um item solto (índice i no topo) para dentro de um grupo (índice gIdx no cfg atual).
+  function looseToGroup(i,gIdx){
+    const page=cfg[i].page;
+    const c=cfg.map(n=>n.type==="group"?{...n,children:[...(n.children||[])]}:{...n});
+    c[gIdx].children.push(page);
+    c.splice(i,1);
+    up(c);
+  }
+  // Move uma página de um grupo (gi,ci) para outro destino: {group:idx} ou {loose:true}.
+  function relocateChild(gi,ci,dest){
+    const page=cfg[gi].children[ci];
+    const c=cfg.map(n=>n.type==="group"?{...n,children:[...(n.children||[])]}:{...n});
+    c[gi].children.splice(ci,1);
+    if(dest.loose) c.push({type:"item",page});
+    else c[dest.group].children.push(page);
+    up(c);
+  }
 
   async function salvar(){
     setSaving(true);setMsg("");
@@ -2847,79 +2944,117 @@ function MenuEditor({userRole}){
       up(JSON.parse(JSON.stringify(DEFAULT_MENU)));
   }
 
-  const ICON_OPTS=["📁","📂","📄","⚙","◫","📋","💰","✉","🔧","⭐","📊","🗂","🧭","🏷"];
+  const groupList=cfg.map((n,idx)=>n.type==="group"?{idx,label:(n.label||"").trim()||`Grupo ${idx+1}`}:null).filter(Boolean);
 
-  return <div>
-    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:12}}>
-      Organize o menu lateral em <b>grupos</b> que expandem e recolhem. Arraste itens para dentro de grupos e defina a ordem com as setas. Esta configuração vale <b>para todos os usuários</b>. Cada item só aparece para quem tem permissão de acesso a ele.
+  return <div className="fade-in">
+    <div style={{fontSize:13,color:"var(--color-text-secondary,#6b6b6b)",marginBottom:14,lineHeight:1.55,maxWidth:660}}>
+      Monte o menu lateral em <b>grupos</b> que expandem e recolhem, ou como itens soltos.
+      Ordene com as setas e use <b>“Mover para…”</b> para trocar uma página de grupo. A configuração
+      vale <b>para todos os usuários</b> — cada pessoa só enxerga as páginas que o cargo dela permite.
     </div>
 
-    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+    <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
       <button className="btn btn-p" onClick={salvar} disabled={saving}>{saving?"Salvando…":"💾 Salvar menu"}</button>
-      <button className="btn btn-s" onClick={addGroup}>+ Novo grupo</button>
+      <button className="btn btn-s" onClick={addGroup}>➕ Novo grupo</button>
       <button className="btn btn-s" onClick={restaurarPadrao}>↺ Restaurar padrão</button>
+      {msg&&<span style={{fontSize:12,color:msg.startsWith("Erro")?"var(--red)":"var(--accent)",fontWeight:600}}>{msg}</span>}
     </div>
-    {msg&&<div style={{fontSize:12,color:msg.startsWith("Erro")?"#f2401a":"var(--accent)",marginBottom:12,fontWeight:600}}>{msg}</div>}
 
-    {/* Estrutura atual */}
-    <div style={{display:"flex",flexDirection:"column",gap:8}}>
-      {cfg.map((node,i)=>
-        <div key={i} style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:12,background:node.type==="group"?"var(--color-surface-secondary,#f8fafc)":"#fff"}}>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <div style={{display:"flex",flexDirection:"column",gap:2}}>
-              <button className="btn btn-s" style={{padding:"1px 7px",fontSize:11}} onClick={()=>moveNode(i,-1)} disabled={i===0}>▲</button>
-              <button className="btn btn-s" style={{padding:"1px 7px",fontSize:11}} onClick={()=>moveNode(i,1)} disabled={i===cfg.length-1}>▼</button>
-            </div>
-            {node.type==="item"?<>
-              <span style={{fontSize:15}}>{PAGE_MAP[node.page]?.ic}</span>
-              <span style={{fontWeight:600,flex:1}}>{PAGE_MAP[node.page]?.lb||node.page} <span style={{fontSize:11,color:"var(--color-text-tertiary)",fontWeight:400}}>(item solto)</span></span>
-              <button className="btn btn-s" style={{fontSize:11,color:"var(--red)"}} onClick={()=>removeNode(i)}>Remover</button>
-            </>:<>
-              <select value={node.icon} onChange={e=>setGroupField(i,"icon",e.target.value)}
-                style={{fontSize:15,padding:"4px 6px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}>
-                {ICON_OPTS.map(ic=><option key={ic} value={ic}>{ic}</option>)}
-              </select>
-              <input value={node.label} onChange={e=>setGroupField(i,"label",e.target.value)}
-                style={{flex:1,fontSize:13,fontWeight:600,padding:"6px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}/>
-              <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>grupo</span>
-              <button className="btn btn-s" style={{fontSize:11,color:"var(--red)"}} onClick={()=>removeNode(i)}>Remover grupo</button>
-            </>}
-          </div>
+    <div style={{display:"flex",gap:22,alignItems:"flex-start",flexWrap:"wrap"}}>
+      {/* ── Editor da estrutura ── */}
+      <div style={{flex:"1 1 460px",minWidth:300,display:"flex",flexDirection:"column",gap:10}}>
+        {cfg.length===0&&<div className="empty" style={{border:"1px dashed var(--color-border-tertiary,#e5e5e3)",borderRadius:12}}>
+          Menu vazio. Crie um grupo ou adicione páginas na seção abaixo.
+        </div>}
 
-          {/* Filhos do grupo */}
-          {node.type==="group"&&<div style={{marginTop:10,paddingLeft:16,borderLeft:"2px solid var(--color-border-tertiary)"}}>
-            {(node.children||[]).length===0&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",padding:"4px 0"}}>Nenhuma página neste grupo ainda.</div>}
-            {(node.children||[]).map((ck,ci)=>
-              <div key={ci} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0"}}>
-                <span style={{fontSize:12,color:"var(--color-text-tertiary)",width:18,textAlign:"right"}}>{ci+1}.</span>
-                <div style={{display:"flex",gap:2}}>
-                  <button className="btn btn-s" style={{padding:"0px 6px",fontSize:10}} onClick={()=>moveChild(i,ci,-1)} disabled={ci===0}>▲</button>
-                  <button className="btn btn-s" style={{padding:"0px 6px",fontSize:10}} onClick={()=>moveChild(i,ci,1)} disabled={ci===node.children.length-1}>▼</button>
-                </div>
-                <span style={{fontSize:14}}>{PAGE_MAP[ck]?.ic}</span>
-                <span style={{flex:1,fontSize:13}}>{PAGE_MAP[ck]?.lb||ck}</span>
-                <button className="btn btn-s" style={{fontSize:11,color:"var(--red)"}} onClick={()=>removeChild(i,ci)}>✕</button>
+        {cfg.map((node,i)=>{
+          const isGroup=node.type==="group";
+          return <div key={i} style={{border:"1px solid var(--color-border-tertiary,#e5e5e3)",borderRadius:12,overflow:"hidden",
+            background:isGroup?"var(--color-surface-secondary,#f8fafc)":"var(--color-background-primary,#fff)"}}>
+            {/* Cabeçalho do nó */}
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 12px"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                <button className="btn btn-s" style={{padding:"1px 8px",fontSize:11,lineHeight:1.4}} onClick={()=>moveNode(i,-1)} disabled={i===0} title="Subir">▲</button>
+                <button className="btn btn-s" style={{padding:"1px 8px",fontSize:11,lineHeight:1.4}} onClick={()=>moveNode(i,1)} disabled={i===cfg.length-1} title="Descer">▼</button>
               </div>
-            )}
-            {disponiveis.length>0&&<select value="" onChange={e=>{if(e.target.value)addChild(i,e.target.value);}}
-              style={{marginTop:6,fontSize:12,padding:"5px 8px",borderRadius:6,border:"1px solid var(--color-border-tertiary)"}}>
-              <option value="">+ Adicionar página a este grupo…</option>
-              {disponiveis.map(([k,ic,lb])=><option key={k} value={k}>{ic} {lb}</option>)}
-            </select>}
-          </div>}
-        </div>
-      )}
-    </div>
+              {isGroup?<>
+                <IconPicker value={node.icon||"📁"} onChange={ic=>setGroupField(i,"icon",ic)}/>
+                <input value={node.label} onChange={e=>setGroupField(i,"label",e.target.value)} placeholder="Nome do grupo"
+                  style={{flex:1,minWidth:100,fontSize:13,fontWeight:600,padding:"8px 10px",borderRadius:7,border:"1px solid var(--color-border-tertiary,#e5e5e3)"}}/>
+                <span className="badge badge-info">Grupo</span>
+                <button className="btn btn-d" style={{fontSize:11,padding:"6px 10px"}} onClick={()=>removeNode(i)} title="Remover grupo — as páginas voltam para “fora do menu”">Remover</button>
+              </>:<>
+                <span style={{fontSize:17,width:22,textAlign:"center"}}>{PAGE_MAP[node.page]?.ic}</span>
+                <span style={{fontWeight:600,flex:1,fontSize:13}}>{PAGE_MAP[node.page]?.lb||node.page}</span>
+                <span className="chip">Item solto</span>
+                {groupList.length>0&&<select value="" onChange={e=>{if(e.target.value!=="")looseToGroup(i,Number(e.target.value));}}
+                  style={{width:"auto",fontSize:11,padding:"6px 8px",borderRadius:7}} title="Mover para um grupo">
+                  <option value="">Mover para…</option>
+                  {groupList.map(g=><option key={g.idx} value={g.idx}>{g.label}</option>)}
+                </select>}
+                <button className="btn btn-d" style={{fontSize:11,padding:"6px 10px"}} onClick={()=>removeNode(i)}>Remover</button>
+              </>}
+            </div>
 
-    {/* Páginas ainda não colocadas */}
-    {disponiveis.length>0&&<div style={{marginTop:16,padding:12,border:"1px dashed var(--color-border-tertiary)",borderRadius:10}}>
-      <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Páginas fora do menu ({disponiveis.length})</div>
-      <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:8}}>Adicione como item solto ou dentro de um grupo acima.</div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-        {disponiveis.map(([k,ic,lb])=>
-          <button key={k} className="btn btn-s" style={{fontSize:12}} onClick={()=>addItemNode(k)}>{ic} {lb} <span style={{opacity:0.6}}>+ solto</span></button>)}
+            {/* Filhos do grupo */}
+            {isGroup&&<div style={{padding:"0 12px 12px 12px"}}>
+              <div style={{borderTop:"1px solid var(--color-border-tertiary,#e5e5e3)",paddingTop:8,display:"flex",flexDirection:"column",gap:2}}>
+                {(node.children||[]).length===0&&<div style={{fontSize:12,color:"var(--color-text-tertiary,#999)",padding:"6px 2px"}}>Nenhuma página neste grupo ainda — use “Adicionar página” abaixo.</div>}
+                {(node.children||[]).map((ck,ci)=>{
+                  const p=PAGE_MAP[ck];
+                  return <div key={ci} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",borderRadius:7}}>
+                    <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                      <button className="btn btn-s" style={{padding:"0px 6px",fontSize:9,lineHeight:1.3}} onClick={()=>moveChild(i,ci,-1)} disabled={ci===0} title="Subir">▲</button>
+                      <button className="btn btn-s" style={{padding:"0px 6px",fontSize:9,lineHeight:1.3}} onClick={()=>moveChild(i,ci,1)} disabled={ci===node.children.length-1} title="Descer">▼</button>
+                    </div>
+                    <span style={{fontSize:15,width:20,textAlign:"center"}}>{p?.ic}</span>
+                    <span style={{flex:1,fontSize:13}}>{p?.lb||ck}</span>
+                    <select value="" onChange={e=>{const v=e.target.value;if(v==="")return;v==="loose"?relocateChild(i,ci,{loose:true}):relocateChild(i,ci,{group:Number(v)});}}
+                      style={{width:"auto",fontSize:11,padding:"5px 8px",borderRadius:7}} title="Mover esta página">
+                      <option value="">Mover para…</option>
+                      {groupList.filter(g=>g.idx!==i).map(g=><option key={g.idx} value={g.idx}>{g.label}</option>)}
+                      <option value="loose">Item solto</option>
+                    </select>
+                    <button className="btn btn-s" style={{fontSize:12,color:"var(--red)",padding:"5px 9px"}} onClick={()=>removeChild(i,ci)} title="Tirar do grupo">✕</button>
+                  </div>;
+                })}
+                {disponiveis.length>0&&<select value="" onChange={e=>{if(e.target.value)addChild(i,e.target.value);}}
+                  style={{marginTop:6,fontSize:12,padding:"7px 9px",borderRadius:7,width:"auto",maxWidth:"100%"}}>
+                  <option value="">➕ Adicionar página a este grupo…</option>
+                  {disponiveis.map(([k,ic,lb])=><option key={k} value={k}>{ic} {lb}</option>)}
+                </select>}
+              </div>
+            </div>}
+          </div>;
+        })}
+
+        {/* Páginas fora do menu */}
+        <div style={{marginTop:6,padding:14,border:"1px dashed var(--color-border-tertiary,#e5e5e3)",borderRadius:12,background:"var(--color-background-primary,#fff)"}}>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:4}}>Páginas fora do menu{disponiveis.length>0?` (${disponiveis.length})`:""}</div>
+          {disponiveis.length===0
+            ? <div style={{fontSize:12,color:"var(--color-text-tertiary,#999)"}}>Todas as páginas já estão no menu. 🎉</div>
+            : <>
+              <div style={{fontSize:11,color:"var(--color-text-tertiary,#999)",marginBottom:10}}>Clique no nome para adicionar como item solto, ou use “+ grupo” para jogar direto em um grupo.</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                {disponiveis.map(([k,ic,lb])=>
+                  <div key={k} style={{display:"flex",alignItems:"stretch",border:"1px solid var(--color-border-tertiary,#e5e5e3)",borderRadius:8,overflow:"hidden"}}>
+                    <button className="btn btn-s" style={{fontSize:12,border:"none",borderRadius:0}} onClick={()=>addItemNode(k)} title="Adicionar como item solto">{ic} {lb}</button>
+                    {groupList.length>0&&<select value="" onChange={e=>{if(e.target.value!=="")addChild(Number(e.target.value),k);}}
+                      style={{width:"auto",fontSize:11,padding:"6px 6px",borderRadius:0,borderLeft:"1px solid var(--color-border-tertiary,#e5e5e3)"}} title="Adicionar a um grupo">
+                      <option value="">+ grupo</option>
+                      {groupList.map(g=><option key={g.idx} value={g.idx}>{g.label}</option>)}
+                    </select>}
+                  </div>)}
+              </div>
+            </>}
+        </div>
       </div>
-    </div>}
+
+      {/* ── Prévia ao vivo ── */}
+      <div style={{flex:"0 1 240px",minWidth:220,position:"sticky",top:12}}>
+        <MenuPreview cfg={cfg}/>
+      </div>
+    </div>
   </div>;
 }
 
