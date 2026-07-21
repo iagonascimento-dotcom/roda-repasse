@@ -22,7 +22,6 @@ const PAGE_REGISTRY = [
   ["pdvs","store","Cadastro PDVs",["master","admin","usuario"]],
   ["conferencia","clipboard-check","Conferência PDVs",["master","admin"]],
   ["entrada","keyboard","Entrada dados",["master","admin"]],
-  ["calcular","calculator","Calcular",["master","admin"]],
   ["demo","receipt","Demonstrativo",["master","admin","usuario"]],
   ["fin","wallet","Financeiro",["master","admin"]],
   ["disparo","mail","Disparo E-mail",["master","admin"]],
@@ -105,7 +104,7 @@ function Icon({name,size=18,style}){
 const DEFAULT_MENU = [
   {type:"item",page:"dashboard"},
   {type:"item",page:"admin"},
-  {type:"group",label:"Passo a passo do repasse",icon:"folder",children:["historico","pdvs","conferencia","entrada","calcular","demo","fin","disparo"]},
+  {type:"group",label:"Passo a passo do repasse",icon:"folder",children:["historico","pdvs","conferencia","entrada","demo","fin","disparo"]},
 ];
 
 /* ─── Config do menu ─── A tabela menu_config guarda { nodes:[...], pages:{<key>:{icon,label}} }.
@@ -116,6 +115,10 @@ function normMenu(raw){
   if(Array.isArray(raw)) nodes=raw;
   else if(raw&&typeof raw==="object"&&Array.isArray(raw.nodes)){ nodes=raw.nodes; pages=raw.pages||{}; }
   if(!nodes||!nodes.length) nodes=JSON.parse(JSON.stringify(DEFAULT_MENU));
+  // Remove referências a páginas que não existem mais (ex.: página retirada do PAGE_REGISTRY).
+  nodes=nodes
+    .map(n=>n.type==="group"?{...n,children:(n.children||[]).filter(c=>PAGE_MAP[c])}:n)
+    .filter(n=>n.type!=="item"||PAGE_MAP[n.page]);
   return {nodes, pages:pages||{}};
 }
 // Ícone+nome efetivos de uma página: override do admin (pages) tem prioridade sobre o padrão (PAGE_MAP).
@@ -1437,7 +1440,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
           </tr>
         </tbody>
       </table></div>}
-      {selPeriods.length>0&&compRows.length===0&&!loadingComp&&<div className="empty">Nenhum resultado calculado nos períodos selecionados. Rode o cálculo na aba Calcular primeiro.</div>}
+      {selPeriods.length>0&&compRows.length===0&&!loadingComp&&<div className="empty">Nenhum resultado calculado nos períodos selecionados. Preencha os dados desses períodos — o cálculo é automático.</div>}
       {selPeriods.length===0&&!loadingComp&&<div style={{fontSize:12,color:"var(--color-text-tertiary)",textAlign:"center",padding:16}}>Selecione "De" e "Até" e clique em Comparar</div>}
       </>}
     </div>}
@@ -2125,80 +2128,6 @@ function DataEntry({pdvs,md,setMd,period,save}) {
   </div>;
 }
 
-/* ─── CalcResults ─── */
-function CalcResults({pdvs,md,results,setResults,save,period}) {
-  const [filter,setFilter]=useState("");
-  const [typeF,setTypeF]=useState("Todos");
-
-  function run(){
-    const res=pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>{
-      const d=md[p.id]||{};
-      const r=calc({...p,manual_adjustment:d.manual_adjustment||p.manual_adjustment||0},
-        d.meter_start||0,d.meter_end||0,d.raw_revenue||0,d.energy_bill_cond||0);
-      return {...r,id:p.id,uuid:p.uuid,name:p.name,contract_type:p.contract_type,
-        revenue_consideration:p.revenue_consideration,payment_day:p.payment_day,
-        negotiated_percentage:p.negotiated_percentage};
-    });
-    setResults(res);save(res);
-  }
-
-  const fil=results.filter(r=>{
-    const ms=r.name?.toLowerCase().includes(filter.toLowerCase())||r.id?.toString().includes(filter);
-    const mt=typeF==="Todos"||r.contract_type===typeF;
-    return ms&&mt;
-  });
-  const tot=fil.reduce((s,r)=>s+(r.total||0),0);
-
-  function exportCSV(){
-    const h="ID,Nome,Tipo,Receita,Subtotal,Ajuste,Total,Detalhes\n";
-    const rows=results.map(r=>`${r.id},"${r.name}","${r.contract_type}","${r.revenue_consideration}",${r.subtotal?.toFixed(2)},${(r.total-r.subtotal)?.toFixed(2)},${r.total?.toFixed(2)},"${r.details}"`).join("\n");
-    const b=new Blob([h+rows],{type:"text/csv;charset=utf-8;"});
-    const a=document.createElement("a");a.href=URL.createObjectURL(b);
-    a.download=`repasse_${period||"periodo"}.csv`;a.click();
-  }
-
-  return <div className="fade-in">
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-      <div className="h2">Calcular repasse</div>
-      <div style={{display:"flex",gap:8}}>
-        <button className="btn btn-p" onClick={run}>⟳ Calcular tudo</button>
-        {results.length>0&&<button className="btn btn-s" onClick={exportCSV}>↓ CSV</button>}
-      </div>
-    </div>
-    {results.length>0?<>
-      <div className="stat bdr-l" style={{borderLeftColor:"#00314f",marginBottom:16}}>
-        <div className="stat-val">{fmt(tot)}</div>
-        <div className="stat-lbl">Total {typeF!=="Todos"?typeF:""} — {fil.length} PDVs</div>
-      </div>
-      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
-        <input style={{width:220}} placeholder="Buscar..." value={filter} onChange={e=>setFilter(e.target.value)}/>
-        <select style={{width:260}} value={typeF} onChange={e=>setTypeF(e.target.value)}>
-          <option>Todos</option>{CONTRACT_TYPES.filter(t=>t!=="Boleto").map(t=><option key={t}>{t}</option>)}
-        </select>
-      </div>
-      <div className="card" style={{padding:0,overflow:"hidden"}}>
-        <div className="scroll-x"><table><thead><tr>
-          <th>PDV</th><th>Tipo</th><th>Subtotal</th><th>Ajuste</th><th>Total</th><th>Detalhes</th>
-        </tr></thead><tbody>
-          {fil.sort((a,b)=>b.total-a.total).map(r=>{const adj=r.total-r.subtotal;
-            return <tr key={r.id}>
-              <td className="trunc" style={{fontWeight:500}}>{r.name}</td>
-              <td><span className="chip">{r.contract_type}</span></td>
-              <td className="mono">{fmt(r.subtotal)}</td>
-              <td className="mono" style={{color:adj!==0?"var(--warn)":"var(--color-text-tertiary)"}}>{adj!==0?fmt(adj):"-"}</td>
-              <td className="mono" style={{fontWeight:700}}>{fmt(r.total)}</td>
-              <td style={{fontSize:10,color:"var(--color-text-secondary)",maxWidth:260}}>{r.details}</td>
-            </tr>;})}
-        </tbody></table></div>
-      </div>
-    </>:<div className="card empty">
-      <div style={{fontSize:28,marginBottom:8}}>⟳</div>
-      Clique em "Calcular tudo" para processar<br/>
-      <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>Preencha medidores e faturamento primeiro</span>
-    </div>}
-  </div>;
-}
-
 /* ─── Pendencias ─── */
 function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRequestChange,isLocked,activePeriod}) {
   const [editMode,setEditMode]=useState(false);
@@ -2460,7 +2389,7 @@ function Financeiro({pdvs,setPdvs,results,period,savePdvs,onDirty}) {
     </div>
     <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20}}>Período: <strong>{period||"Não definido"}</strong></div>
 
-    {results.length===0?<div className="card empty"><div style={{fontSize:28,marginBottom:8}}>⚠</div>Execute o cálculo primeiro na aba "Calcular"</div>:<>
+    {results.length===0?<div className="card empty"><div style={{fontSize:28,marginBottom:8}}>⚠</div>Ainda não há valores calculados. Preencha os medidores e o faturamento na <strong>Entrada de dados</strong> — o cálculo é automático.</div>:<>
       <div className="grid3" style={{marginBottom:20}}>
         <div className="stat bdr-l" style={{borderLeftColor:"#00314f",cursor:"pointer",outline:dayFilter==="20"?"2px solid var(--accent)":"none",borderRadius:10}} onClick={()=>setDayFilter(dayFilter==="20"?"all":"20")}>
           <div style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:4}}>DIA 20 — mês vigente</div>
@@ -3450,7 +3379,7 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
             ["Histórico — criar/entregar/fechar","✓","✓","✗","✗"],["Cadastro PDVs — editar direto","✓","✓","✗","✗"],
             ["Cadastro PDVs — solicitar criar/editar/excluir","—","—","✓","✗"],
             ["Entrada de dados (importar)","✓","✓","✗","✗"],["Pendências — corrigir direto","✓","✓","✗","✗"],
-            ["Pendências — solicitar alteração","—","—","✓","✗"],["Calcular repasse","✓","✓","✗","✗"],
+            ["Pendências — solicitar alteração","—","—","✓","✗"],
             ["Demonstrativo — editar direto","✓","✓","✗","✗"],["Demonstrativo — solicitar alteração","—","—","✓","✗"],
             ["Financeiro (relatório + CSV)","✓","✓","✗","✗"]
           ].map(([f,...perms],i)=><tr key={i}><td style={{fontWeight:500,fontSize:12}}>{f}</td>
@@ -4033,6 +3962,8 @@ export default function App() {
           setResults(resWithNames);
         }
         setReady(true);
+        // Sincroniza nomes com a base automaticamente (só master/admin escrevem). Fire-and-forget.
+        if(ur.role==="master"||ur.role==="admin") autoSyncNamesFromBase(pdvList);
       }catch(e){console.error("Load error:",e);setLoadMsg("Erro ao carregar: "+e.message);}
     })();
   },[authed,authEmail]);
@@ -4148,7 +4079,7 @@ export default function App() {
 
   /* ─── Save helpers ─── */
   // Recalculates ALL results for a period using fresh pdvs/md and persists to Supabase.
-  // Called automatically after any md or pdv change so Calcular/Dashboard/Financeiro stay in sync.
+  // Called automatically after any md or pdv change so Dashboard/Financeiro/Demonstrativo stay in sync.
   async function recalcAndSaveResults(pdvsToUse, mdToUse, periodToUse){
     if(!periodToUse?.id) return;
     const list = (pdvsToUse||[]).filter(p=>p.contract_type!=="Boleto");
@@ -4169,6 +4100,30 @@ export default function App() {
       await SB.saveAllResults(periodToUse.id, res, um);
       console.log(`[recalc] Resultados atualizados (${res.length} PDVs) — período ${periodToUse.nome}`);
     }catch(e){console.error("[recalc] Erro ao salvar resultados:", e);}
+  }
+
+  // Sincroniza automaticamente os nomes dos PDVs com a base (sync.locais): mesmo código, nome
+  // diferente → atualiza o nome (que é global) e registra no histórico. O nome não entra em
+  // nenhum cálculo, então períodos entregues (valores são snapshot no `resultados`) não são afetados.
+  async function autoSyncNamesFromBase(currentPdvs){
+    try{
+      const locais=await SB.loadSyncLocais();
+      const nomePorCodigo=new Map((locais||[]).map(l=>[String(l.codigo||"").trim(),(l.local||"").trim()]));
+      const mudou=[];
+      const novos=(currentPdvs||[]).map(p=>{
+        const code=String(p.id||"").trim();
+        const novo=nomePorCodigo.get(code);
+        if(novo && novo!==(p.name||"").trim()){ mudou.push({uuid:p.uuid,code,antigo:p.name||"",novo}); return {...p,name:novo}; }
+        return p;
+      });
+      if(!mudou.length) return;
+      for(const c of mudou){ if(c.uuid) await SB.patchPdv(c.uuid,{nome:c.novo}); }
+      setPdvs(novos);
+      auditBatch("Nome sincronizado da base",mudou.map(c=>({
+        entidade:"PDV",entidade_nome:c.novo,campo:"Nome",valor_antigo:c.antigo,valor_novo:c.novo,
+        descricao:`Código ${c.code}: nome atualizado automaticamente pela base sincronizada`})));
+      console.log(`[sync-nomes] ${mudou.length} nome(s) atualizado(s) da base`);
+    }catch(e){console.error("[sync-nomes]",e);}
   }
 
   async function savePdvsToSB(newPdvs){
@@ -4295,7 +4250,7 @@ export default function App() {
         if(auditItems.length>0&&auditItems.length<=50) auditBatch("Editou dados mensais",auditItems,activePeriod.nome);
         else if(auditItems.length>50) audit("Importou dados mensais",{periodo_nome:activePeriod.nome,descricao:`${auditItems.length} campos atualizados em ${records.length} PDVs`});
       }
-      // ALWAYS recalc after a save so Calcular/Dashboard/Financeiro stay in sync
+      // ALWAYS recalc after a save so Dashboard/Financeiro stay in sync
       await recalcAndSaveResults(pdvs, newMd, activePeriod);
       // Ponto 3: avisa, em vez de descartar em silêncio, PDVs que não puderam ser salvos.
       if(unmapped.length>0){
@@ -4307,16 +4262,6 @@ export default function App() {
       console.error("Bulk save error:",e);
       alert("Erro ao salvar no banco: "+e.message);
     }
-  }
-
-  async function saveResultsToSB(res){
-    setResults(res);
-    if(!activePeriod)return;
-    try{await SB.saveAllResults(activePeriod.id,res,uuidMap);
-      const tot=res.reduce((s,r)=>s+(r.total||0),0);
-      audit("Calculou repasse",{periodo_nome:activePeriod.nome,
-        descricao:`${res.length} PDVs calculados, total ${new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(tot)}`});
-    }catch(e){console.error("Save results error:",e);}
   }
 
   // No-op save for read-only roles
@@ -4387,8 +4332,14 @@ export default function App() {
       const monthlyData=await SB.loadMonthlyData(p.id,revUuidMap);
       setMd(monthlyData);
       const res=await SB.loadResults(p.id,revUuidMap);
-      const resWithNames=res.map(r=>{const pdv=pdvs.find(x=>x.id===r.id);return {...r,name:pdv?.name||r.name};});
-      setResults(resWithNames);
+      if(res.length===0 && Object.keys(monthlyData).length>0){
+        // Período tem dados mas nunca teve resultados salvos — recalcula e salva
+        // (substitui a antiga aba "Calcular", que fazia isso manualmente).
+        await recalcAndSaveResults(pdvs,monthlyData,p);
+      }else{
+        const resWithNames=res.map(r=>{const pdv=pdvs.find(x=>x.id===r.id);return {...r,name:pdv?.name||r.name};});
+        setResults(resWithNames);
+      }
       setReady(true);
     }catch(e){console.error(e);setReady(true);}
   }
@@ -4601,7 +4552,6 @@ export default function App() {
         {page==="conferencia"&&<Conferencia pdvs={pdvs} userRole={userRole}
           onCadastrar={(data)=>{setPrefilledPdv(data);setPage("pdvs");}}/>}
         {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB}/>}
-        {page==="calcular"&&<CalcResults pdvs={pdvs} md={md} results={results} setResults={setResults} save={saveResultsToSB} period={period}/>}
         {page==="demo"&&<Demonstrativo pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
           period={period} activePeriod={activePeriod} allPeriods={allPeriods} onSelectPeriod={handleSelectPeriod}
           savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}

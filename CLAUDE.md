@@ -38,6 +38,10 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
 - A **Conferência de PDVs** (`Conferencia`) NÃO importa mais planilha — carrega `sync.locais`
   automaticamente e mostra os locais cujo `codigo` não tem PDV cadastrado (`pdvs.vmpay_id`) nem
   está em `pdvs_ignorados` (os "de fora"/pendentes). O cadastro (`PdvForm`) já usa a mesma base.
+- **Sincronização automática de nomes:** no boot (só master/admin), `autoSyncNamesFromBase` compara
+  `pdvs.nome` com `sync.locais.local` pelo mesmo `codigo` e, se mudou, atualiza o nome (global) e
+  registra no histórico ("Nome sincronizado da base"). O código nunca muda. **Não afeta períodos
+  entregues** — o nome não entra em cálculo e os valores são snapshot no `resultados`.
 
 ## Domínio / regras de negócio
 - **Motor de cálculo:** função `calc()` no `App.jsx`. São **11 tipos de contrato**
@@ -45,6 +49,10 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   variantes "OU" (pegam o maior valor), "Conta de Energia + Percentual", e Boleto (sem cálculo).
 - **Faturamento** pode ser **Bruto** (fator 1.0) ou **Líquido** (`LIQ = 0.87`).
 - Medidor: `(medidorFim − medidorInício) × kwh_unity_price`. Há ajuste manual com justificativa.
+- **Cálculo é automático:** `recalcAndSaveResults` roda e grava na tabela `resultados` a cada
+  mudança de PDV ou de dados mensais. NÃO existe mais página "Calcular" (era redundante — removida).
+  Financeiro/Dashboard leem `resultados`; o Demonstrativo calcula ao vivo; `handleSelectPeriod`
+  recalcula sozinho se um período tiver dados mas `resultados` vazio.
 - **Papéis** (`user_roles.role`): `master`, `admin`, `usuario`, `view`, `pendente`.
   Cada página do menu tem sua lista de papéis permitidos.
 
