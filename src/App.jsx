@@ -596,12 +596,7 @@ const css = `
 :root { --accent: #00314f; --accent-bg: #e8f0f5; --accent-light: #004d7a; --orange: #ff8b00; --orange-bg: #fff5e6; --warn: #ff8b00; --warn-bg: #fff5e6; --ok: #9bf400; --ok-bg: #f0ffe0; --red: #f2401a; --red-bg: #fef0ed; --cream: #fffae9; }
 body { font-family: 'DM Sans', sans-serif; }
 .app { display: flex; min-height: 100vh; background: var(--color-background-tertiary, #f5f4f0); color: var(--color-text-primary, #1a1a1a); }
-.side { width: 220px; background: var(--accent); padding: 0 0 16px; flex-shrink: 0; display: flex; flex-direction: column; transition: width 0.22s ease; overflow: hidden; }
-.side.collapsed { width: 64px; }
-.side.collapsed .nav-item-label, .side.collapsed .nav-sep-label, .side.collapsed .side-footer-text { display: none !important; }
-.side.collapsed .nav-item { justify-content: center; padding: 10px 8px; }
-.side.collapsed .nav-sep { padding: 12px 0 4px; text-align: center; }
-.side.collapsed .side-footer { padding: 8px 6px; text-align: center; }
+.side { width: 220px; background: var(--accent); padding: 0 0 16px; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; }
 .logo { padding: 0 16px 12px; font-size: 18px; font-weight: 700; border-bottom: 1px solid rgba(255,255,255,0.12); margin-bottom: 6px; letter-spacing: -0.5px; color: #fff; display: flex; align-items: center; gap: 10px; flex-direction: column; }
 .logo-btn { background: transparent; border: 0; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; width: 100%; }
 .logo-btn:hover { opacity: 0.85; }
@@ -3950,9 +3945,7 @@ export default function App() {
   })();},[]);
   // Memoriza (por navegador) quais grupos a pessoa deixou abertos/fechados.
   useEffect(()=>{try{localStorage.setItem("menu-expanded-groups",JSON.stringify(expandedGroups));}catch{}},[expandedGroups]);
-  const [sidebarCollapsed,setSidebarCollapsed]=useState(true); // sempre inicia recolhido a cada carregamento
   const [prefilledPdv,setPrefilledPdv]=useState(null);
-  function toggleSidebar(){setSidebarCollapsed(v=>!v);}
   const [pdvs,setPdvs]=useState([]);
   const [md,setMd]=useState({});
   const [results,setResults]=useState([]);
@@ -4537,39 +4530,24 @@ export default function App() {
       onConfirm={()=>{setDirty(0);setPage(pendingNav);setPendingNav(null);}}
       onCancel={()=>setPendingNav(null)}/>}
     <div className="app" lang="en">
-      <div className={`side ${sidebarCollapsed?"collapsed":""}`}>
-        <button type="button" className="logo-btn" onClick={toggleSidebar}
-          aria-label={sidebarCollapsed?"Expandir menu":"Recolher menu"}
-          title={sidebarCollapsed?"Expandir menu":"Recolher menu"}
-          style={{flexDirection:"column",padding:sidebarCollapsed?"14px 8px 12px":"14px 16px 12px",gap:2,
-            borderBottom:"1px solid rgba(255,255,255,0.12)",marginBottom:6}}>
-          <img src={LOGO_SVG} alt="Roda" style={{height:sidebarCollapsed?34:120,transition:"height 0.22s ease"}}/>
-          {!sidebarCollapsed&&<span style={{fontSize:11,fontWeight:500,letterSpacing:"2px",color:"rgba(255,255,255,0.45)",textTransform:"uppercase"}}>repasse</span>}
-        </button>
+      <div className="side">
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2,padding:"14px 16px 12px",
+          borderBottom:"1px solid rgba(255,255,255,0.12)",marginBottom:6}}>
+          <img src={LOGO_SVG} alt="Roda" style={{height:120}}/>
+          <span style={{fontSize:11,fontWeight:500,letterSpacing:"2px",color:"rgba(255,255,255,0.45)",textTransform:"uppercase"}}>repasse</span>
+        </div>
         {builtMenu.map((node)=>{
           if(node.kind==="item"){
             if(!PAGE_MAP[node.page])return null;
             const p=pageInfo(node.page,menuPages);
-            return <div key={node.page} className={`nav-item ${page===node.page?"active":""}`} onClick={()=>tryNavigate(node.page)}
-              title={sidebarCollapsed?p.lb:""}>
+            return <div key={node.page} className={`nav-item ${page===node.page?"active":""}`} onClick={()=>tryNavigate(node.page)}>
               <Icon name={p.ic} size={18}/>
               <span className="nav-item-label">{p.lb}</span>
             </div>;
           }
-          // Grupo expansível
-          const isOpen=expandedGroups[node.id]!==false; // aberto por padrão
+          // Grupo — começa FECHADO; abre ao clicar (estado memorizado em expandedGroups)
+          const isOpen=expandedGroups[node.id]===true;
           const hasActiveChild=node.children.includes(page);
-          if(sidebarCollapsed){
-            // Recolhido: mostra a inicial de cada página do grupo, sem cabeçalho
-            return <Fragment key={node.id}>
-              <div className="nav-sep" style={{height:1,background:"rgba(255,255,255,0.08)",margin:"8px 12px"}}/>
-              {node.children.map(ck=>{if(!PAGE_MAP[ck])return null;const p=pageInfo(ck,menuPages);
-                return <div key={ck} className={`nav-item ${page===ck?"active":""}`} onClick={()=>tryNavigate(ck)} title={p.lb}>
-                  <Icon name={p.ic} size={18}/>
-                  <span className="nav-item-label">{p.lb}</span>
-                </div>;})}
-            </Fragment>;
-          }
           return <Fragment key={node.id}>
             <div className="nav-item" onClick={()=>setExpandedGroups(g=>({...g,[node.id]:!isOpen}))}
               style={{opacity:0.9,fontWeight:700,marginTop:6,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
@@ -4592,13 +4570,10 @@ export default function App() {
             <div>{({master:"⭐ Master",admin:"🔧 Admin",usuario:"👤 Usuário",view:"👁 Visualizador"})[role]||role}</div>
             {role!=="view"&&<div style={{marginTop:3}}>{pdvs.length} PDVs • {period||"Sem período"}</div>}
           </div>
-          {sidebarCollapsed&&<div title={`${userRole?.nome||authEmail} (${role})`} style={{textAlign:"center",fontSize:14}}>
-            {({master:"⭐",admin:"🔧",usuario:"👤",view:"👁"})[role]||"?"}
-          </div>}
         </div>
         <div onClick={logout} title="Sair"
-          style={{padding:sidebarCollapsed?"10px 8px":"8px 16px",fontSize:11,color:"rgba(255,255,255,0.5)",cursor:"pointer",borderTop:"1px solid rgba(255,255,255,0.06)",textAlign:sidebarCollapsed?"center":"left"}}>
-          {sidebarCollapsed?"↩":"↩ Sair"}
+          style={{padding:"8px 16px",fontSize:11,color:"rgba(255,255,255,0.5)",cursor:"pointer",borderTop:"1px solid rgba(255,255,255,0.06)",textAlign:"left"}}>
+          ↩ Sair
         </div>
       </div>
       <div className="main">

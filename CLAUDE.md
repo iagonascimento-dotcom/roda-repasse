@@ -60,9 +60,12 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   é o seletor (popover em grade) usado no editor; a lista fica em `MENU_ICON_CHOICES` (todos os
   nomes têm de existir em `ICONS`). Para adicionar um ícone novo: pegar o SVG em lucide.dev, colar o
   **interior** no `ICONS` e o par `[nome, rótulo]` em `MENU_ICON_CHOICES`. Manter 24×24, traço 2.
-- **Estado da sidebar (por navegador, localStorage):** sempre **inicia recolhida** (`sidebarCollapsed`
-  começa `true`, não é persistido). Já os **grupos abertos/fechados são memorizados**
-  (`expandedGroups` ↔ `menu-expanded-groups`). No modo recolhido a sidebar mostra só os ícones.
+- **Sidebar sempre aberta (largura fixa 220px).** Não existe mais o modo "recolhido em barra de
+  ícones" — foi removido a pedido do usuário (sem toggle no logo, sem classe `.side.collapsed`).
+- **Grupos começam FECHADOS** (`isOpen = expandedGroups[node.id]===true`); a pessoa abre clicando no
+  cabeçalho (seta ► fechado / ▼ aberto). Itens diretos (não-grupo) aparecem sempre. Os **grupos que a
+  pessoa abriu são memorizados** por navegador (`expandedGroups` ↔ localStorage `menu-expanded-groups`).
+  É isso que o usuário chama de "menu recolhido": barra cheia com os grupos fechados.
 
 ## Convenções
 - **Estilo de código:** o `App.jsx` é denso e minificado à mão (nomes curtos, pouca quebra de
