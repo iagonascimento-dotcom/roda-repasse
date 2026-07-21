@@ -45,19 +45,24 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   Cada página do menu tem sua lista de papéis permitidos.
 
 ## Menu lateral (importante)
-- `PAGE_REGISTRY` = registro central das páginas (`[key, ic, label, roles]`). O admin **não cria
-  páginas novas**, só as organiza.
-- `menu_config` (tabela) guarda a organização em **grupos expansíveis + itens soltos**, definida
-  pelo master na aba "Organizar menu" (componente `MenuEditor`). Vale para todos os usuários.
-- **Ícones do menu = Lucide** (licença ISC, https://lucide.dev). Objeto `ICONS` (guarda o interior
-  de cada SVG 24×24) + componente `Icon` que renderiza via `dangerouslySetInnerHTML` com
-  `stroke:currentColor` (o ícone herda a cor do texto: branco na sidebar, azul no editor). Em
-  `PAGE_REGISTRY` o campo `ic` é o **nome do ícone Lucide** (ex.: `calculator`, `wallet`, `store`).
-  Grupos usam um ícone fixo `folder`. No modo recolhido a sidebar mostra só os ícones (reconhecíveis
-  por página — foi o objetivo).
-- **Não há seletor de ícone** — o usuário não gostou de escolher ícone manualmente; **não reintroduzir**.
-  Para trocar/adicionar um ícone: pegar o SVG em lucide.dev, colar o **interior** dele no `ICONS` e
-  referenciar o nome no `PAGE_REGISTRY`. Manter o padrão (24×24, traço 2) para preservar a harmonia.
+- `PAGE_REGISTRY` = registro central das páginas (`[key, ic, label, roles]`), com os padrões de
+  ícone/nome. O admin **não cria páginas novas**, só as organiza e personaliza.
+- **`menu_config.config` (jsonb) = `{ nodes:[...], pages:{<key>:{icon,label}} }`**, definido pelo
+  master na aba "Organizar menu" (`MenuEditor`), salvo e válido para todos.
+  - `nodes` = estrutura (grupos/itens/ordem). Grupo = `{type:"group",label,icon,children:[keys]}`;
+    item = `{type:"item",page}`.
+  - `pages` = **overrides por página** de ícone e nome (o admin escolhe o ícone e edita o nome de
+    cada página/grupo). Persistido — não é só visual local.
+  - Compatível com o formato antigo (só o array de nodes) via `normMenu()`. O ícone/nome efetivos
+    de uma página vêm de `pageInfo(key, pages)` (override tem prioridade sobre `PAGE_MAP`).
+- **Ícones = Lucide** (licença ISC, https://lucide.dev). Objeto `ICONS` guarda o interior de cada
+  SVG 24×24; `Icon` renderiza via `dangerouslySetInnerHTML` com `stroke:currentColor`. `IconPicker`
+  é o seletor (popover em grade) usado no editor; a lista fica em `MENU_ICON_CHOICES` (todos os
+  nomes têm de existir em `ICONS`). Para adicionar um ícone novo: pegar o SVG em lucide.dev, colar o
+  **interior** no `ICONS` e o par `[nome, rótulo]` em `MENU_ICON_CHOICES`. Manter 24×24, traço 2.
+- **Estado da sidebar (por navegador, localStorage):** sempre **inicia recolhida** (`sidebarCollapsed`
+  começa `true`, não é persistido). Já os **grupos abertos/fechados são memorizados**
+  (`expandedGroups` ↔ `menu-expanded-groups`). No modo recolhido a sidebar mostra só os ícones.
 
 ## Convenções
 - **Estilo de código:** o `App.jsx` é denso e minificado à mão (nomes curtos, pouca quebra de

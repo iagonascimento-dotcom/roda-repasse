@@ -43,6 +43,53 @@ const ICONS={
   wallet:`<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>`,
   mail:`<path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7"/><rect x="2" y="4" width="20" height="16" rx="2"/>`,
   folder:`<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>`,
+  "house":`<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />`,
+  "settings":`<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /><circle cx="12" cy="12" r="3" />`,
+  "users":`<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><path d="M16 3.128a4 4 0 0 1 0 7.744" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><circle cx="9" cy="7" r="4" />`,
+  "user":`<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />`,
+  "clock":`<circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />`,
+  "calendar":`<path d="M8 2v4" /><path d="M16 2v4" /><rect width="18" height="18" x="3" y="4" rx="2" /><path d="M3 10h18" />`,
+  "calendar-days":`<path d="M8 2v4" /><path d="M16 2v4" /><rect width="18" height="18" x="3" y="4" rx="2" /><path d="M3 10h18" /><path d="M8 14h.01" /><path d="M12 14h.01" /><path d="M16 14h.01" /><path d="M8 18h.01" /><path d="M12 18h.01" /><path d="M16 18h.01" />`,
+  "shopping-cart":`<circle cx="8" cy="21" r="1" /><circle cx="19" cy="21" r="1" /><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" />`,
+  "shopping-bag":`<path d="M16 10a4 4 0 0 1-8 0" /><path d="M3.103 6.034h17.794" /><path d="M3.4 5.467a2 2 0 0 0-.4 1.2V20a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6.667a2 2 0 0 0-.4-1.2l-2-2.667A2 2 0 0 0 17 2H7a2 2 0 0 0-1.6.8z" />`,
+  "clipboard-list":`<rect width="8" height="4" x="8" y="2" rx="1" ry="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="M12 11h4" /><path d="M12 16h4" /><path d="M8 11h.01" /><path d="M8 16h.01" />`,
+  "square-pen":`<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />`,
+  "pencil":`<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />`,
+  "file-text":`<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="M10 9H8" /><path d="M16 13H8" /><path d="M16 17H8" />`,
+  "files":`<path d="M15 2h-4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8" /><path d="M16.706 2.706A2.4 2.4 0 0 0 15 2v5a1 1 0 0 0 1 1h5a2.4 2.4 0 0 0-.706-1.706z" /><path d="M5 7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 1.732-1" />`,
+  "banknote":`<rect width="20" height="12" x="2" y="6" rx="2" /><circle cx="12" cy="12" r="2" /><path d="M6 12h.01M18 12h.01" />`,
+  "landmark":`<path d="M10 18v-7" /><path d="M11.119 2.205a2 2 0 0 1 1.762 0l7.84 3.846A.5.5 0 0 1 20.5 7h-17a.5.5 0 0 1-.22-.949z" /><path d="M14 18v-7" /><path d="M18 18v-7" /><path d="M3 22h18" /><path d="M6 18v-7" />`,
+  "coins":`<path d="M13.744 17.736a6 6 0 1 1-7.48-7.48" /><path d="M15 6h1v4" /><path d="m6.134 14.768.866-.5 2 3.464" /><circle cx="16" cy="8" r="6" />`,
+  "circle-dollar-sign":`<circle cx="12" cy="12" r="10" /><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8" /><path d="M12 18V6" />`,
+  "send":`<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" /><path d="m21.854 2.147-10.94 10.939" />`,
+  "bell":`<path d="M10.268 21a2 2 0 0 0 3.464 0" /><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />`,
+  "star":`<path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" />`,
+  "tag":`<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />`,
+  "tags":`<path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z" /><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193" /><circle cx="10.5" cy="6.5" r=".5" fill="currentColor" />`,
+  "map-pin":`<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" />`,
+  "package":`<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" /><path d="M12 22V12" /><polyline points="3.29 7 12 12 20.71 7" /><path d="m7.5 4.27 9 5.15" />`,
+  "credit-card":`<rect width="20" height="14" x="2" y="5" rx="2" /><line x1="2" x2="22" y1="10" y2="10" />`,
+  "building-2":`<path d="M10 12h4" /><path d="M10 8h4" /><path d="M14 21v-3a2 2 0 0 0-4 0v3" /><path d="M6 10H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2" /><path d="M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16" />`,
+  "building":`<path d="M12 10h.01" /><path d="M12 14h.01" /><path d="M12 6h.01" /><path d="M16 10h.01" /><path d="M16 14h.01" /><path d="M16 6h.01" /><path d="M8 10h.01" /><path d="M8 14h.01" /><path d="M8 6h.01" /><path d="M9 22v-3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" /><rect x="4" y="2" width="16" height="20" rx="2" />`,
+  "trending-up":`<path d="M16 7h6v6" /><path d="m22 7-8.5 8.5-5-5L2 17" />`,
+  "chart-column":`<path d="M3 3v16a2 2 0 0 0 2 2h16" /><path d="M18 17V9" /><path d="M13 17V5" /><path d="M8 17v-3" />`,
+  "chart-bar":`<path d="M3 3v16a2 2 0 0 0 2 2h16" /><path d="M7 16h8" /><path d="M7 11h12" /><path d="M7 6h3" />`,
+  "list":`<path d="M3 5h.01" /><path d="M3 12h.01" /><path d="M3 19h.01" /><path d="M8 5h13" /><path d="M8 12h13" /><path d="M8 19h13" />`,
+  "layout-grid":`<rect width="7" height="7" x="3" y="3" rx="1" /><rect width="7" height="7" x="14" y="3" rx="1" /><rect width="7" height="7" x="14" y="14" rx="1" /><rect width="7" height="7" x="3" y="14" rx="1" />`,
+  "grid-2x2":`<path d="M12 3v18" /><path d="M3 12h18" /><rect x="3" y="3" width="18" height="18" rx="2" />`,
+  "briefcase":`<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /><rect width="20" height="14" x="2" y="6" rx="2" />`,
+  "truck":`<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" /><path d="M15 18H9" /><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14" /><circle cx="17" cy="18" r="2" /><circle cx="7" cy="18" r="2" />`,
+  "percent":`<line x1="19" x2="5" y1="5" y2="19" /><circle cx="6.5" cy="6.5" r="2.5" /><circle cx="17.5" cy="17.5" r="2.5" />`,
+  "key":`<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4" /><path d="m21 2-9.6 9.6" /><circle cx="7.5" cy="15.5" r="5.5" />`,
+  "database":`<ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5V19A9 3 0 0 0 21 19V5" /><path d="M3 12A9 3 0 0 0 21 12" />`,
+  "phone":`<path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384" />`,
+  "printer":`<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6" /><rect x="6" y="14" width="12" height="8" rx="1" />`,
+  "hand-coins":`<path d="M11 15h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 17" /><path d="m7 21 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9" /><path d="m2 16 6 6" /><circle cx="16" cy="9" r="2.9" /><circle cx="6" cy="5" r="3" />`,
+  "piggy-bank":`<path d="M11 17h3v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-3a3.16 3.16 0 0 0 2-2h1a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1h-1a5 5 0 0 0-2-4V3a4 4 0 0 0-3.2 1.6l-.3.4H11a6 6 0 0 0-6 6v1a5 5 0 0 0 2 4v3a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1z" /><path d="M16 10h.01" /><path d="M2 8v1a2 2 0 0 0 2 2h1" />`,
+  "file-spreadsheet":`<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="M8 13h2" /><path d="M14 13h2" /><path d="M8 17h2" /><path d="M14 17h2" />`,
+  "clipboard":`<rect width="8" height="4" x="8" y="2" rx="1" ry="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />`,
+  "inbox":`<polyline points="22 12 16 12 14 15 10 15 8 12 2 12" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />`,
+  "zap":`<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" />`,
 };
 function Icon({name,size=18,style}){
   const inner=ICONS[name];
@@ -57,8 +104,25 @@ function Icon({name,size=18,style}){
 const DEFAULT_MENU = [
   {type:"item",page:"dashboard"},
   {type:"item",page:"admin"},
-  {type:"group",label:"Passo a passo do repasse",icon:"📄",children:["historico","pdvs","conferencia","entrada","calcular","demo","fin","disparo"]},
+  {type:"group",label:"Passo a passo do repasse",icon:"folder",children:["historico","pdvs","conferencia","entrada","calcular","demo","fin","disparo"]},
 ];
+
+/* ─── Config do menu ─── A tabela menu_config guarda { nodes:[...], pages:{<key>:{icon,label}} }.
+   nodes = estrutura (grupos/itens/ordem). pages = ícone/nome personalizados por página (persistido).
+   Aceita o formato antigo (só o array de nodes) para compatibilidade. */
+function normMenu(raw){
+  let nodes=null, pages={};
+  if(Array.isArray(raw)) nodes=raw;
+  else if(raw&&typeof raw==="object"&&Array.isArray(raw.nodes)){ nodes=raw.nodes; pages=raw.pages||{}; }
+  if(!nodes||!nodes.length) nodes=JSON.parse(JSON.stringify(DEFAULT_MENU));
+  return {nodes, pages:pages||{}};
+}
+// Ícone+nome efetivos de uma página: override do admin (pages) tem prioridade sobre o padrão (PAGE_MAP).
+function pageInfo(key,pages){
+  const d=PAGE_MAP[key]||{};
+  const o=(pages&&pages[key])||{};
+  return {ic:o.icon||d.ic, lb:(o.label&&String(o.label).trim())||d.lb||key};
+}
 
 /* ─── Supabase REST adapter ─── */
 const SB_URL = "https://nssjemcdifdkxfhzukmz.supabase.co";
@@ -394,7 +458,7 @@ const SB = {
   /* ─── Configuração do menu (ordenação/grupos, definida pelo admin p/ todos) ─── */
   async loadMenuConfig(){
     const r=await this.api("/rest/v1/menu_config?id=eq.1&select=config");
-    return (r&&r[0]&&r[0].config)||[];
+    return (r&&r[0]&&r[0].config)||null;
   },
   async saveMenuConfig(config,byEmail){
     await this.api("/rest/v1/menu_config?id=eq.1",{method:"PATCH",
@@ -2812,24 +2876,73 @@ function Historico({periods,activePeriod,onSelectPeriod,onCreatePeriod,onUpdateP
 }
 
 /* ─── Editor de Menu (Master): organiza páginas em grupos e ordena, para todos ─── */
-/* Prévia ao vivo do menu lateral — mostra como os usuários vão ver (menu em texto, sem ícones). */
-function MenuPreview({cfg}){
+/* Ícones disponíveis no seletor (todos existem em ICONS). Nome amigável no tooltip. */
+const MENU_ICON_CHOICES=[
+  ["layout-dashboard","Painel"],["house","Início"],["shield","Escudo / Admin"],["settings","Configurações"],
+  ["users","Usuários"],["user","Usuário"],["history","Histórico"],["clock","Relógio"],
+  ["calendar","Calendário"],["calendar-days","Agenda"],["store","Loja / PDV"],["shopping-cart","Carrinho"],
+  ["shopping-bag","Sacola"],["clipboard-check","Conferido"],["clipboard-list","Lista"],["clipboard","Prancheta"],
+  ["keyboard","Teclado"],["square-pen","Editar"],["pencil","Lápis"],["calculator","Calculadora"],
+  ["receipt","Recibo"],["file-text","Documento"],["file-spreadsheet","Planilha"],["files","Arquivos"],
+  ["wallet","Carteira"],["banknote","Dinheiro"],["coins","Moedas"],["hand-coins","Repasse"],
+  ["piggy-bank","Poupança"],["landmark","Banco"],["credit-card","Cartão"],["circle-dollar-sign","Cifrão"],
+  ["percent","Percentual"],["trending-up","Alta"],["chart-column","Gráfico"],["chart-bar","Barras"],
+  ["mail","E-mail"],["send","Enviar"],["inbox","Caixa de entrada"],["bell","Sino"],
+  ["folder","Pasta"],["star","Estrela"],["tag","Etiqueta"],["tags","Etiquetas"],
+  ["map-pin","Local"],["package","Pacote"],["truck","Entrega"],["building-2","Empresa"],
+  ["briefcase","Maleta"],["list","Lista simples"],["grid-2x2","Grade"],["key","Chave"],["database","Banco de dados"],
+];
+/* Seletor de ícone: popover com grade dos ícones Lucide. Usado em grupos e páginas. */
+function IconPicker({value,onChange}){
+  const [open,setOpen]=useState(false);
+  const ref=useRef(null);
+  useEffect(()=>{
+    if(!open)return;
+    const h=(e)=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",h);
+    return ()=>document.removeEventListener("mousedown",h);
+  },[open]);
+  return <div ref={ref} style={{position:"relative",flexShrink:0}}>
+    <button type="button" className="btn btn-s" onClick={()=>setOpen(o=>!o)} title="Escolher ícone"
+      style={{display:"flex",alignItems:"center",gap:5,padding:"6px 8px"}}>
+      <Icon name={value||"folder"} size={17} style={{color:"var(--accent)"}}/>
+      <span style={{fontSize:9,opacity:0.5}}>▾</span>
+    </button>
+    {open&&<div style={{position:"absolute",zIndex:40,top:"calc(100% + 4px)",left:0,width:250,maxHeight:264,overflowY:"auto",
+      background:"var(--color-background-primary,#fff)",border:"1px solid var(--color-border-tertiary,#e5e5e3)",
+      borderRadius:10,padding:8,boxShadow:"0 12px 32px rgba(0,0,0,0.16)",
+      display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:3}}>
+      {MENU_ICON_CHOICES.map(([nm,lbl])=>
+        <button type="button" key={nm} onClick={()=>{onChange(nm);setOpen(false);}} title={lbl}
+          style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"8px 0",borderRadius:7,cursor:"pointer",
+            color:nm===value?"#fff":"var(--color-text-primary,#1a1a1a)",
+            border:"1px solid "+(nm===value?"var(--accent)":"transparent"),
+            background:nm===value?"var(--accent)":"transparent"}}>
+          <Icon name={nm} size={18}/>
+        </button>)}
+    </div>}
+  </div>;
+}
+
+/* Prévia ao vivo do menu lateral — mostra ícone + nome efetivos (com overrides), como o usuário vê. */
+function MenuPreview({cfg,pages}){
   const nodes=[];
   cfg.forEach((node,i)=>{
     if(node.type==="item"){
-      const p=PAGE_MAP[node.page];if(!p)return;
+      if(!PAGE_MAP[node.page])return;
+      const p=pageInfo(node.page,pages);
       nodes.push(<div key={"i"+i} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 16px",fontSize:13,color:"rgba(255,255,255,0.85)"}}><Icon name={p.ic} size={17}/><span>{p.lb}</span></div>);
     }else{
-      const kids=(node.children||[]).map(ck=>PAGE_MAP[ck]?[ck,PAGE_MAP[ck]]:null).filter(Boolean);
+      const kids=(node.children||[]).filter(ck=>PAGE_MAP[ck]);
       if(!kids.length)return;
       nodes.push(<div key={"g"+i}>
         <div style={{display:"flex",alignItems:"center",gap:9,padding:"9px 16px",marginTop:4,borderTop:"1px solid rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.6)"}}>
-          <Icon name="folder" size={15}/>
+          <Icon name={node.icon||"folder"} size={15}/>
           <span style={{flex:1,fontSize:11,fontWeight:700,letterSpacing:"0.5px",textTransform:"uppercase"}}>{node.label||"Grupo"}</span>
           <span style={{fontSize:9,opacity:0.6}}>▼</span>
         </div>
-        {kids.map(([ck,p])=>
-          <div key={ck} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 16px 8px 28px",fontSize:12,color:"rgba(255,255,255,0.8)"}}><Icon name={p.ic} size={16}/><span>{p.lb}</span></div>)}
+        {kids.map(ck=>{const p=pageInfo(ck,pages);return
+          <div key={ck} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 16px 8px 28px",fontSize:12,color:"rgba(255,255,255,0.8)"}}><Icon name={p.ic} size={16}/><span>{p.lb}</span></div>;})}
       </div>);
     }
   });
@@ -2847,13 +2960,14 @@ function MenuPreview({cfg}){
 
 function MenuEditor({userRole}){
   const [cfg,setCfg]=useState(null);
+  const [pages,setPages]=useState({});
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState("");
 
   useEffect(()=>{(async()=>{
-    try{const c=await SB.loadMenuConfig();setCfg(Array.isArray(c)&&c.length?c:DEFAULT_MENU);}
-    catch(e){console.error(e);setCfg(DEFAULT_MENU);}
+    try{const c=await SB.loadMenuConfig();const nm=normMenu(c);setCfg(nm.nodes);setPages(nm.pages);}
+    catch(e){console.error(e);setCfg(JSON.parse(JSON.stringify(DEFAULT_MENU)));setPages({});}
     setLoading(false);
   })();},[]);
 
@@ -2880,6 +2994,9 @@ function MenuEditor({userRole}){
   }
   function setGroupField(i,field,val){
     const c=[...cfg];c[i]={...c[i],[field]:val};up(c);
+  }
+  function setPageField(key,field,val){
+    setPages(p=>({...p,[key]:{...(p[key]||{}),[field]:val}}));setMsg("");
   }
   function addChild(gi,pageKey){
     const c=[...cfg];const g={...c[gi]};g.children=[...(g.children||[]),pageKey];c[gi]=g;up(c);
@@ -2911,23 +3028,23 @@ function MenuEditor({userRole}){
 
   async function salvar(){
     setSaving(true);setMsg("");
-    try{await SB.saveMenuConfig(cfg,userRole?.email||"");
+    try{await SB.saveMenuConfig({nodes:cfg,pages},userRole?.email||"");
       setMsg("✓ Menu salvo! A mudança vale para todos os usuários (pode ser preciso recarregar a página).");
     }catch(e){setMsg("Erro ao salvar: "+e.message);}
     setSaving(false);
   }
   function restaurarPadrao(){
-    if(confirm("Restaurar o menu para o padrão? Isso desfaz sua organização atual (só aplica ao salvar)."))
-      up(JSON.parse(JSON.stringify(DEFAULT_MENU)));
+    if(confirm("Restaurar o menu para o padrão? Isso desfaz a organização, os ícones e os nomes personalizados (só aplica ao salvar).")){
+      up(JSON.parse(JSON.stringify(DEFAULT_MENU)));setPages({});}
   }
 
   const groupList=cfg.map((n,idx)=>n.type==="group"?{idx,label:(n.label||"").trim()||`Grupo ${idx+1}`}:null).filter(Boolean);
 
   return <div className="fade-in">
     <div style={{fontSize:13,color:"var(--color-text-secondary,#6b6b6b)",marginBottom:14,lineHeight:1.55,maxWidth:660}}>
-      Monte o menu lateral em <b>grupos</b> que expandem e recolhem, ou como itens soltos.
-      Ordene com as setas e use <b>“Mover para…”</b> para trocar uma página de grupo. A configuração
-      vale <b>para todos os usuários</b> — cada pessoa só enxerga as páginas que o cargo dela permite.
+      Monte o menu em <b>grupos</b> ou itens soltos, escolha o <b>ícone</b> e edite o <b>nome</b> de cada
+      um, ordene com as setas e use <b>“Mover para…”</b> para trocar de grupo. Tudo é salvo e vale
+      <b>para todos os usuários</b> — cada pessoa só vê as páginas que o cargo dela permite.
     </div>
 
     <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
@@ -2955,14 +3072,15 @@ function MenuEditor({userRole}){
                 <button className="btn btn-s" style={{padding:"1px 8px",fontSize:11,lineHeight:1.4}} onClick={()=>moveNode(i,1)} disabled={i===cfg.length-1} title="Descer">▼</button>
               </div>
               {isGroup?<>
-                <Icon name="folder" size={18} style={{color:"var(--accent)"}}/>
+                <IconPicker value={node.icon||"folder"} onChange={ic=>setGroupField(i,"icon",ic)}/>
                 <input value={node.label} onChange={e=>setGroupField(i,"label",e.target.value)} placeholder="Nome do grupo"
                   style={{flex:1,minWidth:100,fontSize:13,fontWeight:600,padding:"8px 10px",borderRadius:7,border:"1px solid var(--color-border-tertiary,#e5e5e3)"}}/>
                 <span className="badge badge-info">Grupo</span>
                 <button className="btn btn-d" style={{fontSize:11,padding:"6px 10px"}} onClick={()=>removeNode(i)} title="Remover grupo — as páginas voltam para “fora do menu”">Remover</button>
               </>:<>
-                <Icon name={PAGE_MAP[node.page]?.ic} size={18} style={{color:"var(--accent)"}}/>
-                <span style={{fontWeight:600,flex:1,fontSize:13}}>{PAGE_MAP[node.page]?.lb||node.page}</span>
+                <IconPicker value={pageInfo(node.page,pages).ic} onChange={ic=>setPageField(node.page,"icon",ic)}/>
+                <input value={pageInfo(node.page,pages).lb} onChange={e=>setPageField(node.page,"label",e.target.value)} placeholder="Nome no menu"
+                  style={{flex:1,minWidth:100,fontSize:13,fontWeight:600,padding:"8px 10px",borderRadius:7,border:"1px solid var(--color-border-tertiary,#e5e5e3)"}}/>
                 <span className="chip">Item solto</span>
                 {groupList.length>0&&<select value="" onChange={e=>{if(e.target.value!=="")looseToGroup(i,Number(e.target.value));}}
                   style={{width:"auto",fontSize:11,padding:"6px 8px",borderRadius:7}} title="Mover para um grupo">
@@ -2978,14 +3096,14 @@ function MenuEditor({userRole}){
               <div style={{borderTop:"1px solid var(--color-border-tertiary,#e5e5e3)",paddingTop:8,display:"flex",flexDirection:"column",gap:2}}>
                 {(node.children||[]).length===0&&<div style={{fontSize:12,color:"var(--color-text-tertiary,#999)",padding:"6px 2px"}}>Nenhuma página neste grupo ainda — use “Adicionar página” abaixo.</div>}
                 {(node.children||[]).map((ck,ci)=>{
-                  const p=PAGE_MAP[ck];
                   return <div key={ci} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",borderRadius:7}}>
                     <div style={{display:"flex",flexDirection:"column",gap:2}}>
                       <button className="btn btn-s" style={{padding:"0px 6px",fontSize:9,lineHeight:1.3}} onClick={()=>moveChild(i,ci,-1)} disabled={ci===0} title="Subir">▲</button>
                       <button className="btn btn-s" style={{padding:"0px 6px",fontSize:9,lineHeight:1.3}} onClick={()=>moveChild(i,ci,1)} disabled={ci===node.children.length-1} title="Descer">▼</button>
                     </div>
-                    <Icon name={p?.ic} size={16} style={{color:"var(--accent)"}}/>
-                    <span style={{flex:1,fontSize:13}}>{p?.lb||ck}</span>
+                    <IconPicker value={pageInfo(ck,pages).ic} onChange={ic=>setPageField(ck,"icon",ic)}/>
+                    <input value={pageInfo(ck,pages).lb} onChange={e=>setPageField(ck,"label",e.target.value)} placeholder="Nome no menu"
+                      style={{flex:1,fontSize:13,padding:"6px 9px",borderRadius:7,border:"1px solid var(--color-border-tertiary,#e5e5e3)"}}/>
                     <select value="" onChange={e=>{const v=e.target.value;if(v==="")return;v==="loose"?relocateChild(i,ci,{loose:true}):relocateChild(i,ci,{group:Number(v)});}}
                       style={{width:"auto",fontSize:11,padding:"5px 8px",borderRadius:7}} title="Mover esta página">
                       <option value="">Mover para…</option>
@@ -3013,15 +3131,15 @@ function MenuEditor({userRole}){
             : <>
               <div style={{fontSize:11,color:"var(--color-text-tertiary,#999)",marginBottom:10}}>Clique no nome para adicionar como item solto, ou use “+ grupo” para jogar direto em um grupo.</div>
               <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                {disponiveis.map(([k,ic,lb])=>
+                {disponiveis.map(([k])=>{const pi=pageInfo(k,pages);return (
                   <div key={k} style={{display:"flex",alignItems:"stretch",border:"1px solid var(--color-border-tertiary,#e5e5e3)",borderRadius:8,overflow:"hidden"}}>
-                    <button className="btn btn-s" style={{display:"flex",alignItems:"center",gap:6,fontSize:12,border:"none",borderRadius:0}} onClick={()=>addItemNode(k)} title="Adicionar como item solto"><Icon name={ic} size={15} style={{color:"var(--accent)"}}/>{lb}</button>
+                    <button className="btn btn-s" style={{display:"flex",alignItems:"center",gap:6,fontSize:12,border:"none",borderRadius:0}} onClick={()=>addItemNode(k)} title="Adicionar como item solto"><Icon name={pi.ic} size={15} style={{color:"var(--accent)"}}/>{pi.lb}</button>
                     {groupList.length>0&&<select value="" onChange={e=>{if(e.target.value!=="")addChild(Number(e.target.value),k);}}
                       style={{width:"auto",fontSize:11,padding:"6px 6px",borderRadius:0,borderLeft:"1px solid var(--color-border-tertiary,#e5e5e3)"}} title="Adicionar a um grupo">
                       <option value="">+ grupo</option>
                       {groupList.map(g=><option key={g.idx} value={g.idx}>{g.label}</option>)}
                     </select>}
-                  </div>)}
+                  </div>);})}
               </div>
             </>}
         </div>
@@ -3029,7 +3147,7 @@ function MenuEditor({userRole}){
 
       {/* ── Prévia ao vivo ── */}
       <div style={{flex:"0 1 240px",minWidth:220,position:"sticky",top:12}}>
-        <MenuPreview cfg={cfg}/>
+        <MenuPreview cfg={cfg} pages={pages}/>
       </div>
     </div>
   </div>;
@@ -3822,18 +3940,19 @@ export default function App() {
   const [page,setPage]=useState("dashboard");
   // Configuração do menu (grupos/ordem) definida pelo admin, e grupos expandidos
   const [menuConfig,setMenuConfig]=useState(null); // null = ainda carregando; usa DEFAULT se vazio
-  const [expandedGroups,setExpandedGroups]=useState({});
-  useEffect(()=>{(async()=>{
-    try{const c=await SB.loadMenuConfig();setMenuConfig(Array.isArray(c)&&c.length?c:DEFAULT_MENU);}
-    catch(e){console.error("loadMenuConfig",e);setMenuConfig(DEFAULT_MENU);}
-  })();},[]);
-  const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>{
-    try{return localStorage.getItem("sidebar-collapsed")==="1";}catch{return false;}
+  const [menuPages,setMenuPages]=useState({}); // overrides de ícone/nome por página (menu_config.pages)
+  const [expandedGroups,setExpandedGroups]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem("menu-expanded-groups")||"{}")||{};}catch{return {};}
   });
+  useEffect(()=>{(async()=>{
+    try{const c=await SB.loadMenuConfig();const nm=normMenu(c);setMenuConfig(nm.nodes);setMenuPages(nm.pages);}
+    catch(e){console.error("loadMenuConfig",e);setMenuConfig(JSON.parse(JSON.stringify(DEFAULT_MENU)));}
+  })();},[]);
+  // Memoriza (por navegador) quais grupos a pessoa deixou abertos/fechados.
+  useEffect(()=>{try{localStorage.setItem("menu-expanded-groups",JSON.stringify(expandedGroups));}catch{}},[expandedGroups]);
+  const [sidebarCollapsed,setSidebarCollapsed]=useState(true); // sempre inicia recolhido a cada carregamento
   const [prefilledPdv,setPrefilledPdv]=useState(null);
-  function toggleSidebar(){
-    setSidebarCollapsed(v=>{const n=!v;try{localStorage.setItem("sidebar-collapsed",n?"1":"0");}catch{}return n;});
-  }
+  function toggleSidebar(){setSidebarCollapsed(v=>!v);}
   const [pdvs,setPdvs]=useState([]);
   const [md,setMd]=useState({});
   const [results,setResults]=useState([]);
@@ -4402,7 +4521,7 @@ export default function App() {
       if(canSee(node.page)) builtMenu.push({kind:"item",page:node.page});
     }else if(node.type==="group"){
       const kids=(node.children||[]).filter(canSee);
-      if(kids.length>0) builtMenu.push({kind:"group",id:`g${idx}`,label:node.label||"Grupo",children:kids});
+      if(kids.length>0) builtMenu.push({kind:"group",id:`g${idx}`,label:node.label||"Grupo",icon:node.icon||"folder",children:kids});
     }
   });
   // Fallback: qualquer página visível que não esteja na config aparece solta no fim (nunca some).
@@ -4429,7 +4548,8 @@ export default function App() {
         </button>
         {builtMenu.map((node)=>{
           if(node.kind==="item"){
-            const p=PAGE_MAP[node.page];if(!p)return null;
+            if(!PAGE_MAP[node.page])return null;
+            const p=pageInfo(node.page,menuPages);
             return <div key={node.page} className={`nav-item ${page===node.page?"active":""}`} onClick={()=>tryNavigate(node.page)}
               title={sidebarCollapsed?p.lb:""}>
               <Icon name={p.ic} size={18}/>
@@ -4443,7 +4563,7 @@ export default function App() {
             // Recolhido: mostra a inicial de cada página do grupo, sem cabeçalho
             return <Fragment key={node.id}>
               <div className="nav-sep" style={{height:1,background:"rgba(255,255,255,0.08)",margin:"8px 12px"}}/>
-              {node.children.map(ck=>{const p=PAGE_MAP[ck];if(!p)return null;
+              {node.children.map(ck=>{if(!PAGE_MAP[ck])return null;const p=pageInfo(ck,menuPages);
                 return <div key={ck} className={`nav-item ${page===ck?"active":""}`} onClick={()=>tryNavigate(ck)} title={p.lb}>
                   <Icon name={p.ic} size={18}/>
                   <span className="nav-item-label">{p.lb}</span>
@@ -4453,11 +4573,11 @@ export default function App() {
           return <Fragment key={node.id}>
             <div className="nav-item" onClick={()=>setExpandedGroups(g=>({...g,[node.id]:!isOpen}))}
               style={{opacity:0.9,fontWeight:700,marginTop:6,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
-              <Icon name="folder" size={15} style={{opacity:0.85}}/>
+              <Icon name={node.icon||"folder"} size={15} style={{opacity:0.85}}/>
               <span className="nav-item-label" style={{flex:1,fontSize:11,letterSpacing:"0.5px",textTransform:"uppercase",color:hasActiveChild?"#fff":"rgba(255,255,255,0.6)"}}>{node.label}</span>
               <span style={{fontSize:10,opacity:0.6,transition:"transform 0.2s",transform:isOpen?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
             </div>
-            {isOpen&&node.children.map(ck=>{const p=PAGE_MAP[ck];if(!p)return null;
+            {isOpen&&node.children.map(ck=>{if(!PAGE_MAP[ck])return null;const p=pageInfo(ck,menuPages);
               return <div key={ck} className={`nav-item ${page===ck?"active":""}`} onClick={()=>tryNavigate(ck)}
                 style={{paddingLeft:28}}>
                 <Icon name={p.ic} size={16} style={{opacity:0.9}}/>
