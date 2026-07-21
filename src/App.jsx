@@ -1624,81 +1624,91 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
 function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados=new Set(),isEdit=false}) {
   const [f,sf]=useState({...pdv});
   const s=(k,v)=>sf(o=>({...o,[k]:v}));
-  const [localBusca,setLocalBusca]=useState("");
   const [dupWarn,setDupWarn]=useState("");
+  const [showList,setShowList]=useState(false); // dropdown do campo Nome aberto?
+  const nameWrapRef=useRef(null);
 
   // Verifica duplicado sempre que o ID muda (só no modo novo).
   useEffect(()=>{
     if(isEdit){setDupWarn("");return;}
     const cod=String(f.id||"").trim();
-    if(cod && codigosCadastrados.has(cod)){
+    if(cod && codigosCadastrados.has(cod))
       setDupWarn(`Já existe um PDV cadastrado com o código ${cod}. Não é permitido duplicar.`);
-    }else setDupWarn("");
+    else setDupWarn("");
   },[f.id,isEdit]);
 
-  // Aplica um local escolhido do dropdown: preenche o código (âncora) e sugere o nome.
-  function escolherLocal(codigo){
-    const loc=syncLocais.find(l=>String(l.codigo)===String(codigo));
-    if(!loc)return;
+  // Fecha a lista ao clicar fora do campo Nome.
+  useEffect(()=>{
+    function onDoc(e){ if(nameWrapRef.current && !nameWrapRef.current.contains(e.target)) setShowList(false); }
+    document.addEventListener("mousedown",onDoc);
+    return ()=>document.removeEventListener("mousedown",onDoc);
+  },[]);
+
+  // Escolhe um local da base: preenche o código (âncora, oculto) e o nome sugerido.
+  function escolherLocal(loc){
     const jaTem=codigosCadastrados.has(String(loc.codigo));
-    sf(o=>({...o,
-      id:String(loc.codigo),
-      // Sugere o nome do VMPAY; usuário ajusta para o padrão amigável (MC XXX) se quiser.
-      name:o.name && o.name.trim() ? o.name : (loc.local||""),
-    }));
-    if(jaTem) setDupWarn(`Já existe um PDV cadastrado com o código ${loc.codigo}. Não é permitido duplicar.`);
-    else setDupWarn("");
-    setLocalBusca("");
+    if(jaTem)return; // não permite selecionar duplicado
+    sf(o=>({...o, id:String(loc.codigo), name:loc.local||""}));
+    setDupWarn("");
+    setShowList(false);
   }
 
-  // Lista filtrada do dropdown (por nome, código, bairro ou cidade).
-  const termo=localBusca.trim().toLowerCase();
-  const locaisFiltrados=termo.length<2?[]:syncLocais.filter(l=>
+  // Lista filtrada pelo texto do campo Nome (nome, código, bairro ou cidade).
+  const termo=String(f.name||"").trim().toLowerCase();
+  const locaisFiltrados=(isEdit||termo.length<2)?[]:syncLocais.filter(l=>
     (l.local||"").toLowerCase().includes(termo)||
     String(l.codigo).includes(termo)||
     (l.bairro||"").toLowerCase().includes(termo)||
     (l.cidade||"").toLowerCase().includes(termo)
-  ).slice(0,30);
+  ).slice(0,40);
 
   const bloqueiaSalvar=!isEdit && !!dupWarn;
 
   return <div className="card fade-in" style={{border:"2px solid var(--accent)",marginBottom:16}}>
     <div className="h3">{isEdit?"Editar":"Novo"} PDV {isUsuario&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>(sujeito a aprovação)</span>}</div>
 
-    {/* Dropdown de escolha do local (só no cadastro novo) */}
-    {!isEdit&&<div style={{background:"var(--color-surface-secondary,#f8fafc)",borderRadius:10,padding:12,marginBottom:12}}>
-      <div style={{fontSize:12,fontWeight:700,marginBottom:6}}>🔎 Escolher local da base sincronizada</div>
-      <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:8}}>
-        Busque pelo nome, código, bairro ou cidade. Ao escolher, o código do local (âncora) é preenchido automaticamente. O nome pode ser ajustado para o padrão de vocês.
-      </div>
-      <input value={localBusca} onChange={e=>setLocalBusca(e.target.value)}
-        placeholder="Digite ao menos 2 letras… ex.: delos, botafogo, 191546"
-        style={{width:"100%",fontSize:13,padding:"8px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)"}}/>
-      {locaisFiltrados.length>0&&<div style={{maxHeight:220,overflowY:"auto",marginTop:6,border:"1px solid var(--color-border-tertiary)",borderRadius:8,background:"#fff"}}>
-        {locaisFiltrados.map(l=>{
-          const jaTem=codigosCadastrados.has(String(l.codigo));
-          const end=[l.logradouro,l.numero,l.bairro,l.cidade].filter(Boolean).join(", ");
-          return <div key={l.codigo} onClick={()=>!jaTem&&escolherLocal(l.codigo)}
-            style={{padding:"8px 10px",borderBottom:"1px solid #f0f0f0",cursor:jaTem?"not-allowed":"pointer",opacity:jaTem?0.5:1,
-              display:"flex",justifyContent:"space-between",gap:10}}
-            title={jaTem?"Já cadastrado":"Clique para selecionar"}>
-            <div>
-              <div style={{fontWeight:600,fontSize:12}}>{l.local} {jaTem&&<span style={{fontSize:10,color:"var(--color-text-tertiary)"}}>(já cadastrado)</span>}</div>
-              <div style={{fontSize:10.5,color:"var(--color-text-tertiary)"}}>{end||"sem endereço"}</div>
-            </div>
-            <div className="mono" style={{fontSize:11,color:"var(--accent)",whiteSpace:"nowrap"}}>{l.codigo}</div>
-          </div>;
-        })}
-      </div>}
-      {termo.length>=2&&locaisFiltrados.length===0&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:6}}>Nenhum local encontrado na base.</div>}
+    {!isEdit&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:10}}>
+      Comece pelo <b>Nome</b>: digite e escolha o local da base sincronizada. O código do local é vinculado automaticamente. Depois é só ajustar o nome e as regras.
     </div>}
 
     {dupWarn&&<div style={{padding:"8px 12px",borderRadius:8,background:"#fef0ed",color:"#f2401a",fontSize:12,marginBottom:12,fontWeight:600}}>⚠ {dupWarn}</div>}
 
     <div className="grid3">
-      <Field label="ID"><input value={f.id} onChange={e=>s("id",e.target.value)} readOnly={isEdit}
-        style={isEdit?{background:"#f3f4f6",cursor:"not-allowed"}:(dupWarn?{borderColor:"#f2401a"}:undefined)}/></Field>
-      <Field label="Nome"><input value={f.name} onChange={e=>s("name",e.target.value)}/></Field>
+      {/* Campo NOME é o combobox: digita, abre a lista da base, escolhe. ID fica oculto. */}
+      <Field label="Nome">
+        <div ref={nameWrapRef} style={{position:"relative"}}>
+          <input value={f.name} autoComplete="off"
+            placeholder={isEdit?"":"Digite para buscar o local…"}
+            onChange={e=>{s("name",e.target.value); if(!isEdit)setShowList(true);}}
+            onFocus={()=>{if(!isEdit)setShowList(true);}}/>
+          {!isEdit&&f.id&&<div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:3}}>
+            Código vinculado: <span className="mono" style={{color:"var(--accent)",fontWeight:600}}>{f.id}</span>
+          </div>}
+          {showList&&locaisFiltrados.length>0&&<div style={{position:"absolute",zIndex:30,top:"100%",left:0,right:0,
+            maxHeight:260,overflowY:"auto",marginTop:4,border:"1px solid var(--color-border-tertiary)",borderRadius:8,
+            background:"#fff",boxShadow:"0 8px 24px rgba(0,0,0,0.12)"}}>
+            {locaisFiltrados.map(l=>{
+              const jaTem=codigosCadastrados.has(String(l.codigo));
+              const end=[l.logradouro,l.numero,l.bairro,l.cidade].filter(Boolean).join(", ");
+              return <div key={l.codigo} onMouseDown={e=>{e.preventDefault();escolherLocal(l);}}
+                style={{padding:"8px 10px",borderBottom:"1px solid #f0f0f0",cursor:jaTem?"not-allowed":"pointer",opacity:jaTem?0.45:1,
+                  display:"flex",justifyContent:"space-between",gap:10}}
+                title={jaTem?"Já cadastrado":"Selecionar"}>
+                <div style={{minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:12}}>{l.local} {jaTem&&<span style={{fontSize:10,color:"var(--color-text-tertiary)"}}>(já cadastrado)</span>}</div>
+                  <div style={{fontSize:10.5,color:"var(--color-text-tertiary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{end||"sem endereço"}</div>
+                </div>
+                <div className="mono" style={{fontSize:11,color:"var(--accent)",whiteSpace:"nowrap"}}>{l.codigo}</div>
+              </div>;
+            })}
+          </div>}
+          {showList&&!isEdit&&termo.length>=2&&locaisFiltrados.length===0&&<div style={{position:"absolute",zIndex:30,top:"100%",left:0,right:0,
+            marginTop:4,padding:"8px 10px",border:"1px solid var(--color-border-tertiary)",borderRadius:8,background:"#fff",
+            fontSize:11,color:"var(--color-text-tertiary)",boxShadow:"0 8px 24px rgba(0,0,0,0.12)"}}>
+            Nenhum local na base com esse termo. Você pode digitar o nome manualmente.
+          </div>}
+        </div>
+      </Field>
       <Field label="Tipo contrato"><select value={f.contract_type} onChange={e=>s("contract_type",e.target.value)}>
         {CONTRACT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
       <Field label="Receita"><select value={f.revenue_consideration} onChange={e=>s("revenue_consideration",e.target.value)}>
@@ -1709,7 +1719,7 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
       <Field label="Dia pgto"><input type="number" value={f.payment_day} onFocus={e=>e.target.select()} onChange={e=>s("payment_day",parseInt(e.target.value)||20)}/></Field>
     </div>
     <details style={{marginTop:12}}>
-      <summary style={{cursor:"pointer",fontSize:12,fontWeight:600,color:"var(--color-text-secondary)"}}>Dados bancários</summary>
+      <summary style={{cursor:"pointer",fontSize:12,fontWeight:600,color:"var(--color-text-secondary)"}}>Dados bancários {!isEdit&&f.id&&<span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>· código {f.id}</span>}</summary>
       <div className="grid3" style={{marginTop:10}}>
         <Field label="CNPJ Cond."><input value={f.bank_cnpj_cond||""} onChange={e=>s("bank_cnpj_cond",e.target.value)}/></Field>
         <Field label="CNPJ Conta"><input value={f.bank_cnpj||""} onChange={e=>s("bank_cnpj",e.target.value)}/></Field>
