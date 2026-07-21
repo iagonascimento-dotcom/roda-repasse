@@ -32,8 +32,12 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   (guarda snapshots do contrato na época do cálculo), `user_roles`, `change_requests`
   (fluxo de aprovação de alterações), `audit_log`, `pdvs_ignorados` (PDVs que não recebem
   repasse), `pdv_emails`, `mcr`, `menu_config`. Há também a view `sync.locais` (base
-  sincronizada, fonte de verdade dos locais — acesso via header `Accept-Profile: sync`).
+  sincronizada, fonte de verdade dos locais — acesso via header `Accept-Profile: sync`;
+  campos usados: `codigo` = ID VMpay, `local` = nome, + endereço/cidade/estado).
 - **Realtime** via WebSocket nativo (`SB.subscribeRealtime`), sem dependência extra.
+- A **Conferência de PDVs** (`Conferencia`) NÃO importa mais planilha — carrega `sync.locais`
+  automaticamente e mostra os locais cujo `codigo` não tem PDV cadastrado (`pdvs.vmpay_id`) nem
+  está em `pdvs_ignorados` (os "de fora"/pendentes). O cadastro (`PdvForm`) já usa a mesma base.
 
 ## Domínio / regras de negócio
 - **Motor de cálculo:** função `calc()` no `App.jsx`. São **11 tipos de contrato**
@@ -58,7 +62,9 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
 - **Ícones = Lucide** (licença ISC, https://lucide.dev). Objeto `ICONS` guarda o interior de cada
   SVG 24×24; `Icon` renderiza via `dangerouslySetInnerHTML` com `stroke:currentColor`. `IconPicker`
   é o seletor (popover em grade) usado no editor; a lista fica em `MENU_ICON_CHOICES` (todos os
-  nomes têm de existir em `ICONS`). Para adicionar um ícone novo: pegar o SVG em lucide.dev, colar o
+  nomes têm de existir em `ICONS`). O popover é renderizado em **portal** (`createPortal` no
+  `document.body`) com `position:fixed` — necessário porque os cards do editor têm `overflow:hidden`
+  e cortariam um popover `absolute`. Não voltar para `absolute`. Para adicionar um ícone novo: pegar o SVG em lucide.dev, colar o
   **interior** no `ICONS` e o par `[nome, rótulo]` em `MENU_ICON_CHOICES`. Manter 24×24, traço 2.
 - **Sidebar sempre aberta (largura fixa 220px).** Não existe mais o modo "recolhido em barra de
   ícones" — foi removido a pedido do usuário (sem toggle no logo, sem classe `.side.collapsed`).

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from "react";
+import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
 
 const CONTRACT_TYPES = [
@@ -2887,36 +2888,61 @@ const MENU_ICON_CHOICES=[
   ["map-pin","Local"],["package","Pacote"],["truck","Entrega"],["building-2","Empresa"],
   ["briefcase","Maleta"],["list","Lista simples"],["grid-2x2","Grade"],["key","Chave"],["database","Banco de dados"],
 ];
-/* Seletor de ícone: popover com grade dos ícones Lucide. Usado em grupos e páginas. */
+/* Seletor de ícone: grade dos ícones Lucide, renderizada em portal (position:fixed) para não
+   ser cortada pelo overflow:hidden dos cards do editor. Abre para cima se faltar espaço embaixo. */
 function IconPicker({value,onChange}){
   const [open,setOpen]=useState(false);
-  const ref=useRef(null);
+  const [pos,setPos]=useState(null);
+  const btnRef=useRef(null);
+  const popRef=useRef(null);
   useEffect(()=>{
     if(!open)return;
-    const h=(e)=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
-    document.addEventListener("mousedown",h);
-    return ()=>document.removeEventListener("mousedown",h);
+    const onDown=(e)=>{
+      if(btnRef.current&&btnRef.current.contains(e.target))return;
+      if(popRef.current&&popRef.current.contains(e.target))return;
+      setOpen(false);
+    };
+    const onLeave=()=>setOpen(false);
+    document.addEventListener("mousedown",onDown);
+    window.addEventListener("scroll",onLeave,true);
+    window.addEventListener("resize",onLeave);
+    return ()=>{document.removeEventListener("mousedown",onDown);window.removeEventListener("scroll",onLeave,true);window.removeEventListener("resize",onLeave);};
   },[open]);
-  return <div ref={ref} style={{position:"relative",flexShrink:0}}>
-    <button type="button" className="btn btn-s" onClick={()=>setOpen(o=>!o)} title="Escolher ícone"
-      style={{display:"flex",alignItems:"center",gap:5,padding:"6px 8px"}}>
+  function toggle(){
+    if(open){setOpen(false);return;}
+    const r=btnRef.current&&btnRef.current.getBoundingClientRect();
+    if(r){
+      const PW=250, PH=270;
+      const spaceBelow=window.innerHeight-r.bottom;
+      const up=spaceBelow<PH+12 && r.top>spaceBelow;
+      const maxHeight=Math.max(160,Math.min(PH,(up?r.top:spaceBelow)-14));
+      const top=up ? Math.max(8,r.top-6-maxHeight) : r.bottom+6;
+      const left=Math.max(8,Math.min(r.left,window.innerWidth-PW-8));
+      setPos({top,left,maxHeight});
+    }
+    setOpen(true);
+  }
+  return <>
+    <button ref={btnRef} type="button" className="btn btn-s" onClick={toggle} title="Escolher ícone"
+      style={{display:"flex",alignItems:"center",gap:5,padding:"6px 8px",flexShrink:0}}>
       <Icon name={value||"folder"} size={17} style={{color:"var(--accent)"}}/>
       <span style={{fontSize:9,opacity:0.5}}>▾</span>
     </button>
-    {open&&<div style={{position:"absolute",zIndex:40,top:"calc(100% + 4px)",left:0,width:250,maxHeight:264,overflowY:"auto",
-      background:"var(--color-background-primary,#fff)",border:"1px solid var(--color-border-tertiary,#e5e5e3)",
-      borderRadius:10,padding:8,boxShadow:"0 12px 32px rgba(0,0,0,0.16)",
-      display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:3}}>
-      {MENU_ICON_CHOICES.map(([nm,lbl])=>
-        <button type="button" key={nm} onClick={()=>{onChange(nm);setOpen(false);}} title={lbl}
-          style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"8px 0",borderRadius:7,cursor:"pointer",
-            color:nm===value?"#fff":"var(--color-text-primary,#1a1a1a)",
-            border:"1px solid "+(nm===value?"var(--accent)":"transparent"),
-            background:nm===value?"var(--accent)":"transparent"}}>
-          <Icon name={nm} size={18}/>
-        </button>)}
-    </div>}
-  </div>;
+    {open&&pos&&createPortal(
+      <div ref={popRef} style={{position:"fixed",zIndex:1000,top:pos.top,left:pos.left,width:250,maxHeight:pos.maxHeight,overflowY:"auto",
+        background:"var(--color-background-primary,#fff)",border:"1px solid var(--color-border-tertiary,#e5e5e3)",
+        borderRadius:10,padding:8,boxShadow:"0 12px 32px rgba(0,0,0,0.18)",
+        display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:3}}>
+        {MENU_ICON_CHOICES.map(([nm,lbl])=>
+          <button type="button" key={nm} onClick={()=>{onChange(nm);setOpen(false);}} title={lbl}
+            style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"8px 0",borderRadius:7,cursor:"pointer",
+              color:nm===value?"#fff":"var(--color-text-primary,#1a1a1a)",
+              border:"1px solid "+(nm===value?"var(--accent)":"transparent"),
+              background:nm===value?"var(--accent)":"transparent"}}>
+            <Icon name={nm} size={18}/>
+          </button>)}
+      </div>, document.body)}
+  </>;
 }
 
 /* Prévia ao vivo do menu lateral — mostra ícone + nome efetivos (com overrides), como o usuário vê. */
@@ -3491,50 +3517,26 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
   </div>;
 }
 
-/* ─── Conferência de PDVs (importa Excel e detecta pendentes) ─── */
+/* ─── Conferência de PDVs (compara a base sincronizada com os cadastrados) ─── */
 function Conferencia({pdvs,userRole,onCadastrar}){
-  const [excelRows,setExcelRows]=useState([]); // {vmpay_id, nome}
-  const [fileName,setFileName]=useState("");
+  const [locais,setLocais]=useState(null); // null = carregando; array depois
   const [ignored,setIgnored]=useState([]);
-  const [loading,setLoading]=useState(false);
   const [err,setErr]=useState("");
   const [busy,setBusy]=useState(false);
-  const [reasonModal,setReasonModal]=useState(null); // {vmpayId, nome, onConfirm}
+  const [reasonModal,setReasonModal]=useState(null); // {vmpayId, nome}
 
   async function loadIgnoredList(){
     try{const data=await SB.loadIgnored();setIgnored(data||[]);}catch(e){console.error(e);}
   }
-  useEffect(()=>{loadIgnoredList();},[]);
-
-  function parseFile(file){
-    setErr("");setLoading(true);setFileName(file.name);
-    const reader=new FileReader();
-    reader.onload=(e)=>{
-      try{
-        const data=new Uint8Array(e.target.result);
-        const wb=XLSX.read(data,{type:"array"});
-        const sheet=wb.Sheets[wb.SheetNames[0]];
-        const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:""});
-        if(rows.length===0){setErr("Planilha vazia.");setLoading(false);return;}
-        // Try to identify the ID and Name columns by header
-        const header=rows[0].map(c=>String(c).toLowerCase().trim());
-        let idCol=header.findIndex(h=>/vmpay|id|código|codigo|cod/.test(h));
-        let nameCol=header.findIndex(h=>/nome|pdv|loja|cliente/.test(h));
-        if(idCol===-1) idCol=0;
-        if(nameCol===-1) nameCol=idCol===1?0:1;
-        const parsed=[];
-        for(let i=1;i<rows.length;i++){
-          const r=rows[i];if(!r)continue;
-          const vid=String(r[idCol]||"").trim().replace(/\.0$/,"");
-          const nome=String(r[nameCol]||"").trim();
-          if(vid) parsed.push({vmpay_id:vid,nome});
-        }
-        if(parsed.length===0){setErr("Nenhum PDV encontrado. Verifique se a planilha tem colunas de ID e Nome.");setLoading(false);return;}
-        setExcelRows(parsed);setLoading(false);
-      }catch(ex){console.error(ex);setErr("Erro ao ler arquivo: "+ex.message);setLoading(false);}
-    };
-    reader.readAsArrayBuffer(file);
+  // Carrega a base sincronizada (locais do Supabase) e a lista de ignorados de uma vez.
+  async function loadAll(){
+    setErr("");setLocais(null);
+    try{
+      const [l,ig]=await Promise.all([SB.loadSyncLocais(),SB.loadIgnored()]);
+      setLocais(l||[]);setIgnored(ig||[]);
+    }catch(e){console.error(e);setErr("Erro ao carregar a base sincronizada: "+e.message);setLocais([]);}
   }
+  useEffect(()=>{loadAll();},[]);
 
   async function markIgnored(vmpayId,nome,motivo){
     setBusy(true);
@@ -3556,14 +3558,16 @@ function Conferencia({pdvs,userRole,onCadastrar}){
     setBusy(false);
   }
 
-  // Build comparison sets — NOTE: pdvs in state have field "id" (mapped from vmpay_id at load)
+  const carregando=locais===null;
+  // Base sincronizada (só PDVs). codigo = ID VMpay, local = nome. Compara com os cadastrados.
+  const baseRows=(locais||[]).map(l=>({vmpay_id:String(l.codigo||"").trim(),nome:l.local||"",cidade:l.cidade||"",estado:l.estado||""})).filter(r=>r.vmpay_id);
   const registeredIds=new Set(pdvs.map(p=>String(p.id||"").trim()));
   const ignoredIds=new Set(ignored.map(i=>String(i.vmpay_id).trim()));
-  const excelIds=new Set(excelRows.map(r=>r.vmpay_id));
+  const baseIds=new Set(baseRows.map(r=>r.vmpay_id));
 
-  const pendentes=excelRows.filter(r=>!registeredIds.has(r.vmpay_id)&&!ignoredIds.has(r.vmpay_id));
-  const jaCadastrados=excelRows.filter(r=>registeredIds.has(r.vmpay_id));
-  const cadastradosNaoNoExcel=excelRows.length>0?pdvs.filter(p=>!excelIds.has(String(p.id||"").trim())):[];
+  const pendentes=baseRows.filter(r=>!registeredIds.has(r.vmpay_id)&&!ignoredIds.has(r.vmpay_id));
+  const jaCadastrados=baseRows.filter(r=>registeredIds.has(r.vmpay_id));
+  const cadastradosForaBase=pdvs.filter(p=>!baseIds.has(String(p.id||"").trim()));
 
   return <div className="fade-in">
     {reasonModal&&<ReasonModal title="Marcar como não recebe repasse"
@@ -3571,46 +3575,34 @@ function Conferencia({pdvs,userRole,onCadastrar}){
       placeholder="Ex: PDV desativado, contrato encerrado, máquina removida..."
       onConfirm={async(reason)=>{await markIgnored(reasonModal.vmpayId,reasonModal.nome,reason);setReasonModal(null);}}
       onCancel={()=>setReasonModal(null)}/>}
-    <div className="h2" style={{marginBottom:12}}>Conferência de PDVs</div>
-    <p style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>
-      Importe uma planilha (Excel/CSV) com a lista de PDVs ativos do VMpay. O sistema vai mostrar quais ainda não estão cadastrados aqui na plataforma.
-    </p>
-
-    <div className="card">
-      <div className="h3">1. Importar planilha</div>
-      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-        <label className="btn btn-p" style={{cursor:"pointer"}}>
-          📂 Escolher arquivo
-          <input type="file" accept=".xlsx,.xls,.csv" style={{display:"none"}}
-            onChange={e=>{const f=e.target.files[0];if(f)parseFile(f);e.target.value="";}}/>
-        </label>
-        {fileName&&<span style={{fontSize:12,color:"var(--color-text-secondary)"}}>📄 {fileName} — <strong>{excelRows.length}</strong> PDV(s) na planilha</span>}
-        {excelRows.length>0&&<button className="btn btn-s" onClick={()=>{setExcelRows([]);setFileName("");}}>Limpar</button>}
-      </div>
-      {loading&&<div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:8}}>Lendo arquivo...</div>}
-      {err&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",fontSize:12,marginTop:8}}>⚠ {err}</div>}
-      <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:8}}>
-        Aceita .xlsx, .xls e .csv. As colunas devem conter o <strong>ID VMpay</strong> e o <strong>Nome</strong>. O sistema tenta identificar automaticamente.
-      </div>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:12}}>
+      <div className="h2" style={{margin:0}}>Conferência de PDVs</div>
+      <button className="btn btn-s" onClick={loadAll} disabled={carregando}>{carregando?"Carregando…":"↻ Recarregar base"}</button>
     </div>
+    <p style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16,maxWidth:680,lineHeight:1.5}}>
+      A conferência compara automaticamente a <strong>base sincronizada</strong> (locais do Supabase) com os PDVs
+      cadastrados aqui e mostra os que estão <strong>de fora</strong> — ainda não cadastrados. Não precisa mais subir planilha.
+    </p>
+    {err&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",fontSize:12,marginBottom:16}}>⚠ {err}</div>}
 
-    {excelRows.length>0&&<>
-      <div className="grid4" style={{marginBottom:16,marginTop:16}}>
-        <Stat val={excelRows.length} label="Total na planilha" color="#00314f"/>
-        <Stat val={jaCadastrados.length} label="Já cadastrados" color="#9bf400" sub={`${((jaCadastrados.length/excelRows.length)*100).toFixed(0)}% da planilha`}/>
-        <Stat val={pendentes.length} label="Pendentes" color="#ff8b00" sub={pendentes.length>0?"Precisa cadastrar":"Tudo certo ✓"}/>
-        <Stat val={cadastradosNaoNoExcel.length} label="Na plataforma, fora da planilha" color="#888" sub="Possível inativo"/>
+    {carregando?<div className="empty" style={{padding:24,fontSize:13}}>Carregando base sincronizada…</div>:<>
+      <div className="grid4" style={{marginBottom:16}}>
+        <Stat val={baseRows.length} label="Locais na base" color="#00314f"/>
+        <Stat val={jaCadastrados.length} label="Já cadastrados" color="#9bf400" sub={baseRows.length?`${((jaCadastrados.length/baseRows.length)*100).toFixed(0)}% da base`:""}/>
+        <Stat val={pendentes.length} label="Pendentes (de fora)" color="#ff8b00" sub={pendentes.length>0?"Precisa cadastrar":"Tudo certo ✓"}/>
+        <Stat val={cadastradosForaBase.length} label="Cadastrados fora da base" color="#888" sub="Possível inativo"/>
       </div>
 
       <div className="card">
-        <div className="h3">🟠 PDVs pendentes de cadastro ({pendentes.length})</div>
-        {pendentes.length===0?<div className="empty" style={{padding:16,fontSize:13}}>✓ Todos os PDVs da planilha já estão cadastrados!</div>:
+        <div className="h3">🟠 PDVs de fora — pendentes de cadastro ({pendentes.length})</div>
+        {pendentes.length===0?<div className="empty" style={{padding:16,fontSize:13}}>✓ Todos os locais da base já estão cadastrados (ou marcados como sem repasse)!</div>:
         <div className="scroll-x"><table>
-          <thead><tr><th>VMpay ID</th><th>Nome (da planilha)</th><th style={{textAlign:"right"}}>Ação</th></tr></thead>
+          <thead><tr><th>Código</th><th>Nome (base)</th><th>Cidade/UF</th><th style={{textAlign:"right"}}>Ação</th></tr></thead>
           <tbody>{pendentes.map(r=>
             <tr key={r.vmpay_id}>
               <td className="mono" style={{fontSize:12,fontWeight:600}}>{r.vmpay_id}</td>
               <td className="trunc" style={{fontSize:13}}>{r.nome||"—"}</td>
+              <td style={{fontSize:12,color:"var(--color-text-secondary)"}}>{r.cidade?`${r.cidade}${r.estado?"/"+r.estado:""}`:"—"}</td>
               <td style={{textAlign:"right",whiteSpace:"nowrap"}}>
                 <button className="btn btn-s" disabled={busy} style={{fontSize:11,padding:"4px 10px",marginRight:6,color:"var(--accent)",borderColor:"var(--accent)"}}
                   onClick={()=>onCadastrar&&onCadastrar({id:r.vmpay_id,name:r.nome})}>
@@ -3626,16 +3618,16 @@ function Conferencia({pdvs,userRole,onCadastrar}){
           )}</tbody>
         </table></div>}
         {pendentes.length>0&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:8}}>
-          Para cadastrar: vá em <strong>Cadastro PDVs</strong> e crie cada um, ou marque como "não recebe repasse" se for o caso.
+          Clique em <strong>Cadastrar</strong> para abrir o cadastro já preenchido, ou marque como "não recebe repasse".
         </div>}
       </div>
 
-      {cadastradosNaoNoExcel.length>0&&<div className="card">
-        <div className="h3">⚠ Cadastrados aqui mas não estão na planilha ({cadastradosNaoNoExcel.length})</div>
-        <p style={{fontSize:11,color:"var(--color-text-secondary)",marginBottom:8}}>Esses PDVs existem aqui mas o VMpay não enviou. Possivelmente foram desativados.</p>
+      {cadastradosForaBase.length>0&&<div className="card">
+        <div className="h3">⚠ Cadastrados aqui mas fora da base ({cadastradosForaBase.length})</div>
+        <p style={{fontSize:11,color:"var(--color-text-secondary)",marginBottom:8}}>Esses PDVs existem na plataforma mas não estão na base sincronizada. Possivelmente foram desativados na origem.</p>
         <div className="scroll-x"><table>
-          <thead><tr><th>VMpay ID</th><th>Nome</th><th>Tipo</th></tr></thead>
-          <tbody>{cadastradosNaoNoExcel.map(p=>
+          <thead><tr><th>Código</th><th>Nome</th><th>Tipo</th></tr></thead>
+          <tbody>{cadastradosForaBase.map(p=>
             <tr key={p.id}>
               <td className="mono" style={{fontSize:12}}>{p.id}</td>
               <td className="trunc" style={{fontSize:13}}>{p.name}</td>
