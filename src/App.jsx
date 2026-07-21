@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import * as XLSX from "xlsx";
 
 const CONTRACT_TYPES = [
@@ -333,6 +333,13 @@ const SB = {
   async removeMcr(vmpay_id){
     await this.api(`/rest/v1/mcr?vmpay_id=eq.${encodeURIComponent(vmpay_id)}`,
       {method:"DELETE",headers:{"Prefer":"return=minimal"}});
+  },
+
+  /* ─── Locais sincronizados (fonte de verdade: schema sync, view locais) ─── */
+  // Só PDVs. O schema sync é exposto na API; acesso via header Accept-Profile.
+  async loadSyncLocais(){
+    return this.api("/rest/v1/locais?tipo=eq.pdv&select=codigo,local,logradouro,numero,complemento,bairro,cidade,estado&order=local",
+      {headers:{"Accept-Profile":"sync"}});
   },
 
   /* ─── Realtime (native WebSocket, no extra dependency) ─── */
@@ -1446,6 +1453,14 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
   // Snapshot of prefilled data when form opens (avoids losing it on re-renders)
   const [formInitData,setFormInitData]=useState(null);
   const [justify,setJustify]=useState(null);
+  // Locais sincronizados (fonte de verdade) para o dropdown do cadastro
+  const [syncLocais,setSyncLocais]=useState([]);
+  useEffect(()=>{(async()=>{
+    try{const l=await SB.loadSyncLocais();setSyncLocais(l||[]);}
+    catch(e){console.error("loadSyncLocais",e);}
+  })();},[]);
+  // Conjunto de códigos já cadastrados (para negar duplicado). Exclui o que está sendo editado.
+  const codigosCadastrados=new Set(pdvs.map(p=>String(p.id||"").trim()).filter(Boolean));
 
   const isUsuario=userRole?.role==="usuario";
 
@@ -1476,6 +1491,15 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     if(onPrefilledHandled) onPrefilledHandled();
   }
   function savePdv(f){
+    // Trava de duplicado: ao criar (não editar), o código não pode já existir.
+    if(editing===null){
+      const cod=String(f.id||"").trim();
+      if(!cod){alert("Informe o código do local (ID) antes de salvar.");return;}
+      if(codigosCadastrados.has(cod)){
+        alert(`Já existe um PDV cadastrado com o código ${cod}. Não é permitido duplicar.`);
+        return;
+      }
+    }
     if(isUsuario&&onRequestChange){
       // USUARIO flow: create a change_request instead of saving
       const isCreating=editing===null;
@@ -1560,12 +1584,15 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
       💡 Como Usuário, suas ações (criar, editar, excluir) serão enviadas como solicitação para o administrador aprovar.
     </div>}
     <input placeholder="Buscar por nome, ID ou tipo..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:14}}/>
-    {showForm&&<PdvForm key={formPdv.id||"new"} pdv={formPdv} onSave={savePdv} onCancel={closeForm} isUsuario={isUsuario}/>}
+    {/* Form de NOVO PDV fica no topo; edição aparece inline na tabela (abaixo da linha) */}
+    {showForm&&editing===null&&<PdvForm key={formPdv.id||"new"} pdv={formPdv} onSave={savePdv} onCancel={closeForm}
+      isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} isEdit={false}/>}
     <div className="scroll-x">
       <table><thead><tr>
         <th>ID</th><th>Nome</th><th>Contrato</th><th>Receita</th><th>%</th><th>kWh</th><th>Mínimo</th><th></th>
       </tr></thead><tbody>
-        {filtered.map((p,idx)=>{const ri=pdvs.indexOf(p);return <tr key={idx}>
+        {filtered.map((p,idx)=>{const ri=pdvs.indexOf(p);const isEditingThis=editing===ri&&showForm;return <Fragment key={idx}>
+          <tr style={isEditingThis?{background:"var(--accent-bg)"}:undefined}>
           <td className="mono">{p.id}</td>
           <td className="trunc" style={{fontWeight:500}}>{p.name}</td>
           <td><span className="chip">{p.contract_type}</span></td>
@@ -1574,23 +1601,103 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
           <td className="mono">{p.kwh_unity_price||"-"}</td>
           <td className="mono">{p.minimal_repass?fmt(p.minimal_repass):"-"}</td>
           <td>
-            <span style={{cursor:"pointer",marginRight:6}} onClick={()=>{setEditing(ri);setShowForm(true);}}>✎</span>
-            <span style={{cursor:"pointer",color:"var(--red)"}} onClick={()=>del(ri)}>✕</span>
+            <span style={{cursor:"pointer",marginRight:6}} title="Editar" onClick={()=>{
+              if(editing===ri&&showForm){closeForm();}
+              else{setFormInitData(null);setEditing(ri);setShowForm(true);}
+            }}>✎</span>
+            <span style={{cursor:"pointer",color:"var(--red)"}} title="Excluir" onClick={()=>del(ri)}>✕</span>
           </td>
-        </tr>;})}
+        </tr>
+          {isEditingThis&&<tr><td colSpan={8} style={{padding:0,background:"var(--accent-bg)"}}>
+            <div style={{padding:"4px 8px 12px"}}>
+              <PdvForm key={"edit-"+(p.id||ri)} pdv={pdvs[ri]} onSave={savePdv} onCancel={closeForm}
+                isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} isEdit={true}/>
+            </div>
+          </td></tr>}
+        </Fragment>;})}
       </tbody></table>
     </div>
     {filtered.length===0&&<div className="empty">Nenhum PDV encontrado</div>}
   </div>;
 }
 
-function PdvForm({pdv,onSave,onCancel,isUsuario}) {
+function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados=new Set(),isEdit=false}) {
   const [f,sf]=useState({...pdv});
   const s=(k,v)=>sf(o=>({...o,[k]:v}));
+  const [localBusca,setLocalBusca]=useState("");
+  const [dupWarn,setDupWarn]=useState("");
+
+  // Verifica duplicado sempre que o ID muda (só no modo novo).
+  useEffect(()=>{
+    if(isEdit){setDupWarn("");return;}
+    const cod=String(f.id||"").trim();
+    if(cod && codigosCadastrados.has(cod)){
+      setDupWarn(`Já existe um PDV cadastrado com o código ${cod}. Não é permitido duplicar.`);
+    }else setDupWarn("");
+  },[f.id,isEdit]);
+
+  // Aplica um local escolhido do dropdown: preenche o código (âncora) e sugere o nome.
+  function escolherLocal(codigo){
+    const loc=syncLocais.find(l=>String(l.codigo)===String(codigo));
+    if(!loc)return;
+    const jaTem=codigosCadastrados.has(String(loc.codigo));
+    sf(o=>({...o,
+      id:String(loc.codigo),
+      // Sugere o nome do VMPAY; usuário ajusta para o padrão amigável (MC XXX) se quiser.
+      name:o.name && o.name.trim() ? o.name : (loc.local||""),
+    }));
+    if(jaTem) setDupWarn(`Já existe um PDV cadastrado com o código ${loc.codigo}. Não é permitido duplicar.`);
+    else setDupWarn("");
+    setLocalBusca("");
+  }
+
+  // Lista filtrada do dropdown (por nome, código, bairro ou cidade).
+  const termo=localBusca.trim().toLowerCase();
+  const locaisFiltrados=termo.length<2?[]:syncLocais.filter(l=>
+    (l.local||"").toLowerCase().includes(termo)||
+    String(l.codigo).includes(termo)||
+    (l.bairro||"").toLowerCase().includes(termo)||
+    (l.cidade||"").toLowerCase().includes(termo)
+  ).slice(0,30);
+
+  const bloqueiaSalvar=!isEdit && !!dupWarn;
+
   return <div className="card fade-in" style={{border:"2px solid var(--accent)",marginBottom:16}}>
-    <div className="h3">{pdv.id?"Editar":"Novo"} PDV {isUsuario&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>(sujeito a aprovação)</span>}</div>
+    <div className="h3">{isEdit?"Editar":"Novo"} PDV {isUsuario&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>(sujeito a aprovação)</span>}</div>
+
+    {/* Dropdown de escolha do local (só no cadastro novo) */}
+    {!isEdit&&<div style={{background:"var(--color-surface-secondary,#f8fafc)",borderRadius:10,padding:12,marginBottom:12}}>
+      <div style={{fontSize:12,fontWeight:700,marginBottom:6}}>🔎 Escolher local da base sincronizada</div>
+      <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:8}}>
+        Busque pelo nome, código, bairro ou cidade. Ao escolher, o código do local (âncora) é preenchido automaticamente. O nome pode ser ajustado para o padrão de vocês.
+      </div>
+      <input value={localBusca} onChange={e=>setLocalBusca(e.target.value)}
+        placeholder="Digite ao menos 2 letras… ex.: delos, botafogo, 191546"
+        style={{width:"100%",fontSize:13,padding:"8px 10px",borderRadius:8,border:"1px solid var(--color-border-tertiary)"}}/>
+      {locaisFiltrados.length>0&&<div style={{maxHeight:220,overflowY:"auto",marginTop:6,border:"1px solid var(--color-border-tertiary)",borderRadius:8,background:"#fff"}}>
+        {locaisFiltrados.map(l=>{
+          const jaTem=codigosCadastrados.has(String(l.codigo));
+          const end=[l.logradouro,l.numero,l.bairro,l.cidade].filter(Boolean).join(", ");
+          return <div key={l.codigo} onClick={()=>!jaTem&&escolherLocal(l.codigo)}
+            style={{padding:"8px 10px",borderBottom:"1px solid #f0f0f0",cursor:jaTem?"not-allowed":"pointer",opacity:jaTem?0.5:1,
+              display:"flex",justifyContent:"space-between",gap:10}}
+            title={jaTem?"Já cadastrado":"Clique para selecionar"}>
+            <div>
+              <div style={{fontWeight:600,fontSize:12}}>{l.local} {jaTem&&<span style={{fontSize:10,color:"var(--color-text-tertiary)"}}>(já cadastrado)</span>}</div>
+              <div style={{fontSize:10.5,color:"var(--color-text-tertiary)"}}>{end||"sem endereço"}</div>
+            </div>
+            <div className="mono" style={{fontSize:11,color:"var(--accent)",whiteSpace:"nowrap"}}>{l.codigo}</div>
+          </div>;
+        })}
+      </div>}
+      {termo.length>=2&&locaisFiltrados.length===0&&<div style={{fontSize:11,color:"var(--color-text-tertiary)",marginTop:6}}>Nenhum local encontrado na base.</div>}
+    </div>}
+
+    {dupWarn&&<div style={{padding:"8px 12px",borderRadius:8,background:"#fef0ed",color:"#f2401a",fontSize:12,marginBottom:12,fontWeight:600}}>⚠ {dupWarn}</div>}
+
     <div className="grid3">
-      <Field label="ID"><input value={f.id} onChange={e=>s("id",e.target.value)}/></Field>
+      <Field label="ID"><input value={f.id} onChange={e=>s("id",e.target.value)} readOnly={isEdit}
+        style={isEdit?{background:"#f3f4f6",cursor:"not-allowed"}:(dupWarn?{borderColor:"#f2401a"}:undefined)}/></Field>
       <Field label="Nome"><input value={f.name} onChange={e=>s("name",e.target.value)}/></Field>
       <Field label="Tipo contrato"><select value={f.contract_type} onChange={e=>s("contract_type",e.target.value)}>
         {CONTRACT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
@@ -1614,7 +1721,8 @@ function PdvForm({pdv,onSave,onCancel,isUsuario}) {
       </div>
     </details>
     <div style={{marginTop:12,display:"flex",gap:8}}>
-      <button className="btn btn-p" onClick={()=>onSave(f)}>{isUsuario?"📩 Enviar solicitação":"Salvar"}</button>
+      <button className="btn btn-p" disabled={bloqueiaSalvar} onClick={()=>{if(!bloqueiaSalvar)onSave(f);}}
+        style={bloqueiaSalvar?{opacity:0.5,cursor:"not-allowed"}:undefined}>{isUsuario?"📩 Enviar solicitação":"Salvar"}</button>
       <button className="btn btn-s" onClick={onCancel}>Cancelar</button>
     </div>
   </div>;
