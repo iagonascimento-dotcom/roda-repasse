@@ -82,6 +82,9 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   É isso que o usuário chama de "menu recolhido": barra cheia com os grupos fechados.
 
 ## Convenções
+- **Percentuais** (`negotiated_percentage`) são guardados como **fração** (7% = `0.07`). Para exibir
+  em input editável, use o helper `toPct(fração)` (não `*100` cru — `0.07*100 = 7.000…1`). Ao salvar,
+  divide por 100 de volta. Campos só-leitura já usam `.toFixed(1)`.
 - **Estilo de código:** o `App.jsx` é denso e minificado à mão (nomes curtos, pouca quebra de
   linha, estilos inline). Ao editar, siga o padrão do arquivo em vez de "formatar bonito".
 - **CSS:** tokens em `:root` (`--accent #00314f`, `--orange #ff8b00`, `--red #f2401a`, etc.) +

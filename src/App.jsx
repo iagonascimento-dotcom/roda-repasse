@@ -593,6 +593,8 @@ function calc(pdv, ms, me, rev, eBillCond) {
 }
 
 const fmt=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(v||0);
+// Fração (0.07) → percentual limpo para inputs, sem ruído de ponto flutuante (0.07*100 = 7.000…1).
+const toPct=v=>Math.round((v||0)*100*1e6)/1e6;
 
 const css = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
@@ -1859,7 +1861,7 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
         {CONTRACT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
       <Field label="Receita"><select value={f.revenue_consideration} onChange={e=>s("revenue_consideration",e.target.value)}>
         {REV_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
-      <Field label="% Negociado"><input type="number" step="0.01" value={(f.negotiated_percentage||0)*100} onFocus={e=>e.target.select()} onChange={e=>s("negotiated_percentage",(parseFloat(e.target.value)||0)/100)}/></Field>
+      <Field label="% Negociado"><input type="number" step="0.01" value={toPct(f.negotiated_percentage)} onFocus={e=>e.target.select()} onChange={e=>s("negotiated_percentage",(parseFloat(e.target.value)||0)/100)}/></Field>
       <Field label="kWh preço"><input type="number" step="0.01" value={f.kwh_unity_price} onFocus={e=>e.target.select()} onChange={e=>s("kwh_unity_price",parseFloat(e.target.value)||0)}/></Field>
       <Field label="Mínimo"><input type="number" step="0.01" value={f.minimal_repass} onFocus={e=>e.target.select()} onChange={e=>s("minimal_repass",parseFloat(e.target.value)||0)}/></Field>
       <Field label="Dia pgto"><input type="number" value={f.payment_day} onFocus={e=>e.target.select()} onChange={e=>s("payment_day",parseInt(e.target.value)||20)}/></Field>
@@ -2299,7 +2301,7 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
                 value={(()=>{
                   const editedVal=is.isMd?mdEdits[p.id]?.[is.field]:pdvEdits[p.id]?.[is.field];
                   const baseVal=editedVal!==undefined?editedVal:getVal(p.id,is.field,false);
-                  if(is.field==="negotiated_percentage") return (parseFloat(baseVal)||0)*100;
+                  if(is.field==="negotiated_percentage") return toPct(parseFloat(baseVal)||0);
                   return baseVal??"";
                 })()}
                 onChange={e=>{
@@ -2549,7 +2551,7 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
     if(!editMode) return typeof val==="number"?(val>0||val<0?fmt(val):"-"):val;
     // For percent fields: display as percentage (multiply by 100), store as decimal (divide by 100)
     const rawStored=isMd?(localMd[pid]?.[field]??val):(localPdvEdits[pid]?.[field]??val);
-    const displayVal=isPct?(rawStored||0)*100:rawStored;
+    const displayVal=isPct?toPct(rawStored):rawStored;
     return <input type="number" style={{...editSt2,width:w||80}} step={isPct?"0.01":"any"}
       value={displayVal}
       onChange={e=>{
