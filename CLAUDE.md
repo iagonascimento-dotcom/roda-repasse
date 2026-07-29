@@ -38,6 +38,10 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
 - A **Conferência de PDVs** (`Conferencia`) NÃO importa mais planilha — carrega `sync.locais`
   automaticamente e mostra os locais cujo `codigo` não tem PDV cadastrado (`pdvs.vmpay_id`) nem
   está em `pdvs_ignorados` (os "de fora"/pendentes). O cadastro (`PdvForm`) já usa a mesma base.
+- **Cadastro pendente some do fluxo:** quando um `usuario` pede cadastro de PDV, cria um
+  `change_requests` tipo `pdv_create` status `pendente`. Enquanto pendente, esse `codigo` some do
+  dropdown do `PdvForm` **e** da lista "de fora" da Conferência (via `SB.loadPendingPdvCreateCodes()`).
+  Aprovado → vira PDV (cadastrado). Recusado (status `rejeitado`) → deixa de ser pendente e reaparece.
 - **Sincronização automática de nomes:** no boot (só master/admin), `autoSyncNamesFromBase` compara
   `pdvs.nome` com `sync.locais.local` pelo mesmo `codigo` e, se mudou, atualiza o nome (global) e
   registra no histórico ("Nome sincronizado da base"). O código nunca muda. **Não afeta períodos
@@ -85,6 +89,8 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
 - **Percentuais** (`negotiated_percentage`) são guardados como **fração** (7% = `0.07`). Para exibir
   em input editável, use o helper `toPct(fração)` (não `*100` cru — `0.07*100 = 7.000…1`). Ao salvar,
   divide por 100 de volta. Campos só-leitura já usam `.toFixed(1)`.
+- **Inputs numéricos** (cadastro/entrada) mostram vazio quando o valor é 0 (`value={x||""}` +
+  `placeholder="0"`) — assim a pessoa clica e o campo já fica limpo, sem apagar o "0".
 - **Estilo de código:** o `App.jsx` é denso e minificado à mão (nomes curtos, pouca quebra de
   linha, estilos inline). Ao editar, siga o padrão do arquivo em vez de "formatar bonito".
 - **CSS:** tokens em `:root` (`--accent #00314f`, `--orange #ff8b00`, `--red #f2401a`, etc.) +

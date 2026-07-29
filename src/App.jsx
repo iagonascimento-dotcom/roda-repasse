@@ -378,6 +378,12 @@ const SB = {
     const q=statusFilter?`&status=eq.${statusFilter}`:"";
     return this.api(`/rest/v1/change_requests?select=*&order=created_at.desc${q}`);
   },
+  // Códigos (vmpay_id) com solicitação de cadastro (pdv_create) ainda PENDENTE.
+  // Ficam "em processo": somem do dropdown e da conferência até serem aprovados ou recusados.
+  async loadPendingPdvCreateCodes(){
+    const rows=await this.api("/rest/v1/change_requests?select=pdv_vmpay_id&tipo=eq.pdv_create&status=eq.pendente");
+    return (rows||[]).map(r=>String(r.pdv_vmpay_id||"").trim()).filter(Boolean);
+  },
   async createChangeRequest(req){
     await this.api("/rest/v1/change_requests",{method:"POST",body:JSON.stringify(req),
       headers:{"Prefer":"return=minimal"}});
@@ -1582,11 +1588,15 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
   const [syncLocais,setSyncLocais]=useState([]);
   // Códigos marcados como "não recebe repasse" (Conferência) — saem do dropdown
   const [ignorados,setIgnorados]=useState(new Set());
+  // Códigos com cadastro PENDENTE de aprovação — também saem do dropdown (voltam se recusado)
+  const [pendentesCriacao,setPendentesCriacao]=useState(new Set());
   useEffect(()=>{(async()=>{
     try{const l=await SB.loadSyncLocais();setSyncLocais(l||[]);}
     catch(e){console.error("loadSyncLocais",e);}
     try{const ig=await SB.loadIgnored();setIgnorados(new Set((ig||[]).map(x=>String(x.vmpay_id))));}
     catch(e){console.error("loadIgnored",e);}
+    try{const pc=await SB.loadPendingPdvCreateCodes();setPendentesCriacao(new Set(pc));}
+    catch(e){console.error("loadPendingPdvCreateCodes",e);}
   })();},[]);
   // Conjunto de códigos já cadastrados (para negar duplicado). Exclui o que está sendo editado.
   const codigosCadastrados=new Set(pdvs.map(p=>String(p.id||"").trim()).filter(Boolean));
@@ -1661,6 +1671,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
       setJustify({changeCount:reqs.length,detail:changesSummary.join("\n"),
         onConfirm:async(reason)=>{
           try{for(const r of reqs) await onRequestChange({...r,justificativa:reason});
+            if(isCreating){try{const pc=await SB.loadPendingPdvCreateCodes();setPendentesCriacao(new Set(pc));}catch{}}
             alert(isCreating?"Solicitação de cadastro enviada! Aguarde aprovação do administrador.":"Solicitações de alteração enviadas!");
           }catch(e){alert("Erro: "+e.message);}
           setJustify(null);closeForm();
@@ -1715,7 +1726,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     <input placeholder="Buscar por nome, ID ou tipo..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:14}}/>
     {/* Form de NOVO PDV fica no topo; edição aparece inline na tabela (abaixo da linha) */}
     {showForm&&editing===null&&<PdvForm key={formPdv.id||"new"} pdv={formPdv} onSave={savePdv} onCancel={closeForm}
-      isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} ignorados={ignorados} isEdit={false}/>}
+      isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} ignorados={ignorados} pendentes={pendentesCriacao} isEdit={false}/>}
     <div className="scroll-x">
       <table><thead><tr>
         <th>ID</th><th>Nome</th><th>Contrato</th><th>Receita</th><th>%</th><th>kWh</th><th>Mínimo</th><th></th>
@@ -1740,7 +1751,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
           {isEditingThis&&<tr><td colSpan={8} style={{padding:0,background:"var(--accent-bg)"}}>
             <div style={{padding:"4px 8px 12px"}}>
               <PdvForm key={"edit-"+(p.id||ri)} pdv={pdvs[ri]} onSave={savePdv} onCancel={closeForm}
-                isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} ignorados={ignorados} isEdit={true}/>
+                isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} ignorados={ignorados} pendentes={pendentesCriacao} isEdit={true}/>
             </div>
           </td></tr>}
         </Fragment>;})}
@@ -1750,7 +1761,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
   </div>;
 }
 
-function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados=new Set(),ignorados=new Set(),isEdit=false}) {
+function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados=new Set(),ignorados=new Set(),pendentes=new Set(),isEdit=false}) {
   const [f,sf]=useState({...pdv});
   const s=(k,v)=>sf(o=>({...o,[k]:v}));
   const [dupWarn,setDupWarn]=useState("");
@@ -1787,7 +1798,7 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
   const termo=String(f.name||"").trim().toLowerCase();
   const locaisFiltrados=isEdit?[]:(()=>{
     // Fonte já exclui os locais marcados como "não recebe repasse" na Conferência.
-    const fonte=syncLocais.filter(l=>!ignorados.has(String(l.codigo)));
+    const fonte=syncLocais.filter(l=>!ignorados.has(String(l.codigo))&&!pendentes.has(String(l.codigo)));
     const base=termo.length<1?fonte:fonte.filter(l=>
       (l.local||"").toLowerCase().includes(termo)||
       String(l.codigo).includes(termo)||
@@ -1861,9 +1872,9 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
         {CONTRACT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
       <Field label="Receita"><select value={f.revenue_consideration} onChange={e=>s("revenue_consideration",e.target.value)}>
         {REV_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
-      <Field label="% Negociado"><input type="number" step="0.01" value={toPct(f.negotiated_percentage)} onFocus={e=>e.target.select()} onChange={e=>s("negotiated_percentage",(parseFloat(e.target.value)||0)/100)}/></Field>
-      <Field label="kWh preço"><input type="number" step="0.01" value={f.kwh_unity_price} onFocus={e=>e.target.select()} onChange={e=>s("kwh_unity_price",parseFloat(e.target.value)||0)}/></Field>
-      <Field label="Mínimo"><input type="number" step="0.01" value={f.minimal_repass} onFocus={e=>e.target.select()} onChange={e=>s("minimal_repass",parseFloat(e.target.value)||0)}/></Field>
+      <Field label="% Negociado"><input type="number" step="0.01" placeholder="0" value={toPct(f.negotiated_percentage)||""} onFocus={e=>e.target.select()} onChange={e=>s("negotiated_percentage",(parseFloat(e.target.value)||0)/100)}/></Field>
+      <Field label="kWh preço"><input type="number" step="0.01" placeholder="0" value={f.kwh_unity_price||""} onFocus={e=>e.target.select()} onChange={e=>s("kwh_unity_price",parseFloat(e.target.value)||0)}/></Field>
+      <Field label="Mínimo"><input type="number" step="0.01" placeholder="0" value={f.minimal_repass||""} onFocus={e=>e.target.select()} onChange={e=>s("minimal_repass",parseFloat(e.target.value)||0)}/></Field>
       <Field label="Dia pgto"><input type="number" value={f.payment_day} onFocus={e=>e.target.select()} onChange={e=>s("payment_day",parseInt(e.target.value)||20)}/></Field>
     </div>
     <details style={{marginTop:12}}>
@@ -3454,17 +3465,18 @@ function Conferencia({pdvs,userRole,onCadastrar}){
   const [ignored,setIgnored]=useState([]);
   const [err,setErr]=useState("");
   const [busy,setBusy]=useState(false);
+  const [pendentesCriacao,setPendentesCriacao]=useState([]); // códigos com pdv_create pendente
   const [reasonModal,setReasonModal]=useState(null); // {vmpayId, nome}
 
   async function loadIgnoredList(){
     try{const data=await SB.loadIgnored();setIgnored(data||[]);}catch(e){console.error(e);}
   }
-  // Carrega a base sincronizada (locais do Supabase) e a lista de ignorados de uma vez.
+  // Carrega a base sincronizada, a lista de ignorados e os cadastros pendentes de aprovação.
   async function loadAll(){
     setErr("");setLocais(null);
     try{
-      const [l,ig]=await Promise.all([SB.loadSyncLocais(),SB.loadIgnored()]);
-      setLocais(l||[]);setIgnored(ig||[]);
+      const [l,ig,pc]=await Promise.all([SB.loadSyncLocais(),SB.loadIgnored(),SB.loadPendingPdvCreateCodes()]);
+      setLocais(l||[]);setIgnored(ig||[]);setPendentesCriacao(pc||[]);
     }catch(e){console.error(e);setErr("Erro ao carregar a base sincronizada: "+e.message);setLocais([]);}
   }
   useEffect(()=>{loadAll();},[]);
@@ -3494,9 +3506,12 @@ function Conferencia({pdvs,userRole,onCadastrar}){
   const baseRows=(locais||[]).map(l=>({vmpay_id:String(l.codigo||"").trim(),nome:l.local||"",cidade:l.cidade||"",estado:l.estado||""})).filter(r=>r.vmpay_id);
   const registeredIds=new Set(pdvs.map(p=>String(p.id||"").trim()));
   const ignoredIds=new Set(ignored.map(i=>String(i.vmpay_id).trim()));
+  const emCriacaoIds=new Set(pendentesCriacao.map(c=>String(c).trim()));
   const baseIds=new Set(baseRows.map(r=>r.vmpay_id));
 
-  const pendentes=baseRows.filter(r=>!registeredIds.has(r.vmpay_id)&&!ignoredIds.has(r.vmpay_id));
+  // "De fora" = não cadastrado, não ignorado E sem cadastro pendente de aprovação.
+  const pendentes=baseRows.filter(r=>!registeredIds.has(r.vmpay_id)&&!ignoredIds.has(r.vmpay_id)&&!emCriacaoIds.has(r.vmpay_id));
+  const aguardandoAprovacao=baseRows.filter(r=>emCriacaoIds.has(r.vmpay_id)&&!registeredIds.has(r.vmpay_id)).length;
   const jaCadastrados=baseRows.filter(r=>registeredIds.has(r.vmpay_id));
   const cadastradosForaBase=pdvs.filter(p=>!baseIds.has(String(p.id||"").trim()));
 
@@ -3526,6 +3541,7 @@ function Conferencia({pdvs,userRole,onCadastrar}){
 
       <div className="card">
         <div className="h3">🟠 PDVs de fora — pendentes de cadastro ({pendentes.length})</div>
+        {aguardandoAprovacao>0&&<div style={{fontSize:11,color:"var(--color-text-secondary)",marginBottom:8}}>ℹ {aguardandoAprovacao} com cadastro <strong>aguardando aprovação</strong> do admin — ocultos daqui (reaparecem se recusados).</div>}
         {pendentes.length===0?<div className="empty" style={{padding:16,fontSize:13}}>✓ Todos os locais da base já estão cadastrados (ou marcados como sem repasse)!</div>:
         <div className="scroll-x"><table>
           <thead><tr><th>Código</th><th>Nome (base)</th><th>Cidade/UF</th><th style={{textAlign:"right"}}>Ação</th></tr></thead>
