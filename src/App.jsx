@@ -601,6 +601,27 @@ function calc(pdv, ms, me, rev, eBillCond) {
 const fmt=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(v||0);
 // Fração (0.07) → percentual limpo para inputs, sem ruído de ponto flutuante (0.07*100 = 7.000…1).
 const toPct=v=>Math.round((v||0)*100*1e6)/1e6;
+// CNPJ: máscara progressiva (00.000.000/0000-00) e validação com dígitos verificadores.
+function maskCNPJ(v){
+  const d=String(v||"").replace(/\D/g,"").slice(0,14);
+  let r=d.slice(0,2);
+  if(d.length>2) r+="."+d.slice(2,5);
+  if(d.length>5) r+="."+d.slice(5,8);
+  if(d.length>8) r+="/"+d.slice(8,12);
+  if(d.length>12) r+="-"+d.slice(12,14);
+  return r;
+}
+function isValidCNPJ(v){
+  const c=String(v||"").replace(/\D/g,"");
+  if(c.length!==14||/^(\d)\1{13}$/.test(c)) return false; // 14 dígitos e não todos iguais
+  const n=c.split("").map(Number);
+  const dig=len=>{
+    const w=len===12?[5,4,3,2,9,8,7,6,5,4,3,2]:[6,5,4,3,2,9,8,7,6,5,4,3,2];
+    let s=0;for(let i=0;i<len;i++)s+=n[i]*w[i];
+    const r=s%11;return r<2?0:11-r;
+  };
+  return dig(12)===n[12]&&dig(13)===n[13];
+}
 
 const css = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
@@ -1812,7 +1833,10 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
     }).slice(0,200);
   })();
 
-  const bloqueiaSalvar=!isEdit && !!dupWarn;
+  // CNPJ inválido só bloqueia se estiver preenchido (vazio é permitido).
+  const cnpjCondBad=(f.bank_cnpj_cond||"").replace(/\D/g,"").length>0 && !isValidCNPJ(f.bank_cnpj_cond);
+  const cnpjContaBad=(f.bank_cnpj||"").replace(/\D/g,"").length>0 && !isValidCNPJ(f.bank_cnpj);
+  const bloqueiaSalvar=(!isEdit && !!dupWarn) || cnpjCondBad || cnpjContaBad;
 
   return <div className="card fade-in" style={{border:"2px solid var(--accent)",marginBottom:16}}>
     <div className="h3">{isEdit?"Editar":"Novo"} PDV {isUsuario&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>(sujeito a aprovação)</span>}</div>
@@ -1880,8 +1904,12 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
     <details style={{marginTop:12}}>
       <summary style={{cursor:"pointer",fontSize:12,fontWeight:600,color:"var(--color-text-secondary)"}}>Dados bancários {!isEdit&&f.id&&<span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>· código {f.id}</span>}</summary>
       <div className="grid3" style={{marginTop:10}}>
-        <Field label="CNPJ Cond."><input value={f.bank_cnpj_cond||""} onChange={e=>s("bank_cnpj_cond",e.target.value)}/></Field>
-        <Field label="CNPJ Conta"><input value={f.bank_cnpj||""} onChange={e=>s("bank_cnpj",e.target.value)}/></Field>
+        <Field label="CNPJ Cond."><input value={f.bank_cnpj_cond||""} placeholder="00.000.000/0000-00" onChange={e=>s("bank_cnpj_cond",maskCNPJ(e.target.value))}
+          style={cnpjCondBad?{borderColor:"var(--red)",boxShadow:"0 0 0 2px var(--red-bg)"}:undefined}/>
+          {cnpjCondBad&&<div style={{fontSize:10,color:"var(--red)",marginTop:3,fontWeight:600}}>CNPJ inválido — confira os números</div>}</Field>
+        <Field label="CNPJ Conta"><input value={f.bank_cnpj||""} placeholder="00.000.000/0000-00" onChange={e=>s("bank_cnpj",maskCNPJ(e.target.value))}
+          style={cnpjContaBad?{borderColor:"var(--red)",boxShadow:"0 0 0 2px var(--red-bg)"}:undefined}/>
+          {cnpjContaBad&&<div style={{fontSize:10,color:"var(--red)",marginTop:3,fontWeight:600}}>CNPJ inválido — confira os números</div>}</Field>
         <Field label="Nome Conta"><input value={f.bank_name||""} onChange={e=>s("bank_name",e.target.value)}/></Field>
         <Field label="Banco"><input value={f.bank_banco||""} onChange={e=>s("bank_banco",e.target.value)}/></Field>
         <Field label="Agência"><input value={f.bank_agencia||""} onChange={e=>s("bank_agencia",e.target.value)}/></Field>
@@ -1889,6 +1917,7 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
         <Field label="PIX"><input value={f.bank_pix||""} onChange={e=>s("bank_pix",e.target.value)}/></Field>
       </div>
     </details>
+    {(cnpjCondBad||cnpjContaBad)&&<div style={{fontSize:11,color:"var(--red)",marginTop:10,fontWeight:600}}>⚠ Corrija o CNPJ em “Dados bancários” para poder salvar.</div>}
     <div style={{marginTop:12,display:"flex",gap:8}}>
       <button className="btn btn-p" disabled={bloqueiaSalvar} onClick={()=>{if(!bloqueiaSalvar)onSave(f);}}
         style={bloqueiaSalvar?{opacity:0.5,cursor:"not-allowed"}:undefined}>{isUsuario?"📩 Enviar solicitação":"Salvar"}</button>

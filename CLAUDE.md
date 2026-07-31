@@ -91,6 +91,9 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   divide por 100 de volta. Campos só-leitura já usam `.toFixed(1)`.
 - **Inputs numéricos** (cadastro/entrada) mostram vazio quando o valor é 0 (`value={x||""}` +
   `placeholder="0"`) — assim a pessoa clica e o campo já fica limpo, sem apagar o "0".
+- **CNPJ** (dados bancários: `bank_cnpj`, `bank_cnpj_cond`) tem máscara `maskCNPJ` (00.000.000/0000-00)
+  e validação com dígitos verificadores `isValidCNPJ`. CNPJ preenchido e inválido bloqueia o salvar
+  no `PdvForm` (`bloqueiaSalvar`); vazio é permitido. Vale para admin (salvar) e usuário (solicitar).
 - **Estilo de código:** o `App.jsx` é denso e minificado à mão (nomes curtos, pouca quebra de
   linha, estilos inline). Ao editar, siga o padrão do arquivo em vez de "formatar bonito".
 - **CSS:** tokens em `:root` (`--accent #00314f`, `--orange #ff8b00`, `--red #f2401a`, etc.) +
