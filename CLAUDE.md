@@ -94,6 +94,9 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
 - **CNPJ** (dados bancários: `bank_cnpj`, `bank_cnpj_cond`) tem máscara `maskCNPJ` (00.000.000/0000-00)
   e validação com dígitos verificadores `isValidCNPJ`. CNPJ preenchido e inválido bloqueia o salvar
   no `PdvForm` (`bloqueiaSalvar`); vazio é permitido. Vale para admin (salvar) e usuário (solicitar).
+- **Upsert em lote** (`upsertEmails`, `bulkUpsertMonthly`) precisa **deduplicar pela chave de conflito**
+  antes de enviar (última ocorrência vence) — dois registros com a mesma chave no mesmo POST dão o
+  erro Postgres `21000` ("ON CONFLICT DO UPDATE cannot affect row a second time").
 - **Estilo de código:** o `App.jsx` é denso e minificado à mão (nomes curtos, pouca quebra de
   linha, estilos inline). Ao editar, siga o padrão do arquivo em vez de "formatar bonito".
 - **CSS:** tokens em `:root` (`--accent #00314f`, `--orange #ff8b00`, `--red #f2401a`, etc.) +

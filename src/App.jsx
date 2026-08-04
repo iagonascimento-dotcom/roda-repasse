@@ -316,11 +316,16 @@ const SB = {
   },
   async bulkUpsertMonthly(periodoId,records){
     if(!records.length)return;
-    const body=records.map(r=>({periodo_id:periodoId,pdv_id:r.pdvUuid,
+    // Dedup por pdv_id (última ocorrência vence) — evita o erro 21000 do Postgres se o mesmo PDV
+    // aparecer repetido no lote (ON CONFLICT não pode afetar a mesma linha duas vezes).
+    const uniq=new Map();
+    records.forEach(r=>{if(r.pdvUuid)uniq.set(String(r.pdvUuid),r);});
+    const body=[...uniq.values()].map(r=>({periodo_id:periodoId,pdv_id:r.pdvUuid,
       meter_start:r.data.meter_start||0,meter_end:r.data.meter_end||0,
       raw_revenue:r.data.raw_revenue||0,manual_adjustment:r.data.manual_adjustment||0,
       manual_adjustment_desc:r.data.manual_adjustment_desc||"",
       energy_bill_cond:r.data.energy_bill_cond||0,updated_at:new Date().toISOString()}));
+    if(!body.length)return;
     await this.api("/rest/v1/dados_mensais?on_conflict=periodo_id,pdv_id",{method:"POST",body:JSON.stringify(body),
       headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
   },
@@ -438,7 +443,12 @@ const SB = {
   // Importa/atualiza em lote. items: [{vmpay_id, local, email}]
   async upsertEmails(items){
     if(!items.length) return;
-    const body=items.map(i=>({vmpay_id:String(i.vmpay_id).trim(),local:i.local||"",email:(i.email||"").trim(),updated_at:new Date().toISOString()}));
+    // Dedup por vmpay_id (última ocorrência vence). Sem isso, código repetido no lote causa o erro
+    // 21000 do Postgres ("ON CONFLICT DO UPDATE cannot affect row a second time").
+    const uniq=new Map();
+    items.forEach(i=>{const k=String(i.vmpay_id||"").trim();if(k)uniq.set(k,i);});
+    const body=[...uniq.values()].map(i=>({vmpay_id:String(i.vmpay_id).trim(),local:i.local||"",email:(i.email||"").trim(),updated_at:new Date().toISOString()}));
+    if(!body.length) return;
     await this.api("/rest/v1/pdv_emails",{method:"POST",
       body:JSON.stringify(body),
       headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
@@ -3751,7 +3761,9 @@ function DisparoEmail({pdvs, md, period, activePeriod}){
       setEmails(m);
       // Reaplica nos rows já gerados
       setRows(rs=>rs.map(r=>({...r,Email:m[String(r["Código do Local"])]??r.Email})));
-      setMsg(`${items.length} e-mail(s) importado(s) e salvos no banco.`);
+      const unicos=new Set(items.map(i=>String(i.vmpay_id).trim())).size;
+      const dups=items.length-unicos;
+      setMsg(`${unicos} e-mail(s) importado(s) e salvos no banco.${dups>0?` (${dups} código(s) repetido(s) na lista — manteve o último)`:""}`);
       setImportText("");setShowImport(false);
     }catch(e){console.error(e);setMsg("Erro ao importar: "+e.message);}
     setImporting(false);
