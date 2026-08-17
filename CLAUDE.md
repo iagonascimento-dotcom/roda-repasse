@@ -57,6 +57,19 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   mudança de PDV ou de dados mensais. NÃO existe mais página "Calcular" (era redundante — removida).
   Financeiro/Dashboard leem `resultados`; o Demonstrativo calcula ao vivo; `handleSelectPeriod`
   recalcula sozinho se um período tiver dados mas `resultados` vazio.
+- **Entrada de dados / importação (`DataEntry`):** colar-e-importar (medidor início/fim, faturamento)
+  NÃO casa mais por nome fuzzy cego. `matchPdv(nome)` resolve na ordem **exato → código (`pdvs.id`) →
+  aproximado** e **nunca lança quando há ambiguidade** (2+ PDVs com nome parecido). `classificar`
+  separa em aplicar / aproximados (CONFIRA) / ambíguos (não lança) / não-encontrados e
+  `abrirConfirmacaoImport` abre um `ConfirmModal` com o resumo do casamento **antes de salvar**. A
+  grade de leituras/faturamento mostra o **código** (`pdvs.id`) ao lado do nome. Mitiga lançar no PDV
+  errado (ex.: "MC RESIDENCIA" vs "MC RESIDENCIA (PISCINA)").
+- **Botão "Média" (preenche FIM de medidor faltante):** na aba Medidores, `preencherMedia` completa o
+  `meter_end` dos PDVs de medidor que têm **início mas sem fim**, com
+  **fim = início do mês atual + consumo do mês anterior + N kWh** (N vem da caixa "Acréscimo (kWh)",
+  padrão 5). Acha o período anterior por `ano*12+mes`, lê `SB.loadMonthlyData(prev.id, pdvMap)`, pula
+  quem não tem dado no mês anterior e confirma no `ConfirmModal` antes de salvar. Ex.: início 1535,
+  consumo do mês anterior 511, N=5 → fim 2051. Para PDV sem medidor físico no local (paga média).
 - **Papéis** (`user_roles.role`): `master`, `admin`, `usuario`, `view`, `pendente`.
   Cada página do menu tem sua lista de papéis permitidos.
 

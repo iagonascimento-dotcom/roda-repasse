@@ -1937,13 +1937,16 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
 }
 
 /* ─── Data Entry ─── */
-function DataEntry({pdvs,md,setMd,period,save}) {
+function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
   const [tab,setTab]=useState("meters");
   const [paste,setPaste]=useState("");
   const [localMd,setLocalMd]=useState(md);
   const [dirty,setDirty]=useState(0);
   const [saving,setSaving]=useState(false);
   const [lastSave,setLastSave]=useState("");
+  const [confirmImport,setConfirmImport]=useState(null); // conferência antes de aplicar import
+  const [mediaInc,setMediaInc]=useState(5); // acréscimo (kWh) do botão "Preencher média"
+  const [loadingMedia,setLoadingMedia]=useState(false);
 
   // Sync localMd when md changes externally (e.g. period switch)
   useEffect(()=>{setLocalMd(md);setDirty(0);},[md]);
@@ -1957,6 +1960,8 @@ function DataEntry({pdvs,md,setMd,period,save}) {
 
   const mPdvs=pdvs.filter(p=>needsMeter(p.contract_type));
   const rPdvs=pdvs.filter(p=>needsRev(p.contract_type));
+  // Medidores com início mas SEM fim — alvo do botão "Preencher média".
+  const faltamFim=mPdvs.filter(p=>{const d=localMd[p.id]||{};return (Number(d.meter_start)||0)>0 && !((Number(d.meter_end)||0)>0);}).length;
 
   // Local edit functions (no save, just state)
   function upd(pid,field,val){
@@ -2020,47 +2025,72 @@ function DataEntry({pdvs,md,setMd,period,save}) {
     return parseFloat(clean)||0;
   }
 
-  function findPdv(name){
-    if(!name)return null;
+  // Casamento seguro nome→PDV. NUNCA "chuta" em ambiguidade: se o nome casa com 2+ PDVs
+  // (ex.: "MC RESIDENCIA" e "MC RESIDENCIA (PISCINA)"), retorna ambíguo e NÃO lança nada.
+  function matchPdv(name){
+    if(!name) return {tipo:null};
     const n=name.trim().toUpperCase();
-    return pdvs.find(p=>p.name?.toUpperCase()===n)
-      || pdvs.find(p=>p.name?.toUpperCase().includes(n)||n.includes(p.name?.toUpperCase()))
-      || pdvs.find(p=>p.id===name.trim());
+    const exato=pdvs.filter(p=>(p.name||"").trim().toUpperCase()===n);
+    if(exato.length===1) return {pdv:exato[0],tipo:"exato"};
+    if(exato.length>1) return {tipo:"ambiguo",cands:exato};
+    const porCod=pdvs.find(p=>String(p.id||"").trim()===name.trim());
+    if(porCod) return {pdv:porCod,tipo:"codigo"};
+    const aprox=pdvs.filter(p=>{const pn=(p.name||"").trim().toUpperCase();return pn&&(pn.includes(n)||n.includes(pn));});
+    if(aprox.length===1) return {pdv:aprox[0],tipo:"aprox"};
+    if(aprox.length>1) return {tipo:"ambiguo",cands:aprox};
+    return {tipo:null};
   }
 
-  async function importMeters(type){
+  // Distribui cada linha casada em: aplicar (exato/código), aprox (nome não bateu exato — CONFIRA),
+  // ambíguo (2+ PDVs parecidos — NÃO lança) e não-encontrado. Abre a conferência antes de salvar.
+  function classificar(name,val,buckets){
+    const m=matchPdv(name);
+    if(m.tipo==="exato"||m.tipo==="codigo") buckets.aplicar.push({pid:m.pdv.id,val});
+    else if(m.tipo==="aprox"){buckets.aplicar.push({pid:m.pdv.id,val});buckets.aprox.push(`⚠ "${name}" → ${m.pdv.name} (cód ${m.pdv.id})`);}
+    else if(m.tipo==="ambiguo") buckets.ambiguos.push(`⛔ "${name}" → ${m.cands.map(c=>`${c.name} (${c.id})`).join(" / ")}`);
+    else buckets.naoEnc.push(name);
+  }
+  function abrirConfirmacaoImport(field,label,b){
+    if(!b.aplicar.length && !b.ambiguos.length){alert("Nenhum PDV combinou com os nomes colados. Confira a planilha.");return;}
+    const partes=[`${b.aplicar.length} PDV(s) serão lançados em "${label}".`];
+    if(b.aprox.length) partes.push(`\n⚠ APROXIMADOS — o nome não bateu exato, CONFIRA cada um:\n${b.aprox.join("\n")}`);
+    if(b.ambiguos.length) partes.push(`\n⛔ AMBÍGUOS — nomes parecidos, NÃO serão lançados (faça manual pelo código):\n${b.ambiguos.join("\n")}`);
+    if(b.naoEnc.length) partes.push(`\nNão encontrados (${b.naoEnc.length}): ${b.naoEnc.slice(0,12).join(", ")}${b.naoEnc.length>12?"…":""}`);
+    setConfirmImport({msg:`Confira o casamento antes de salvar.${b.ambiguos.length?" Itens AMBÍGUOS (nomes parecidos) NÃO serão lançados — faça manual pelo código.":""}`,detail:partes.join("\n"),apply:async()=>{
+      const u={...localMd};
+      b.aplicar.forEach(a=>{u[a.pid]={...(u[a.pid]||{}),[field]:a.val};});
+      setLocalMd(u);setMd(u);setPaste("");setDirty(0);setConfirmImport(null);
+      try{await save(u);setLastSave(new Date().toLocaleTimeString("pt-BR"));
+        alert(`✓ ${b.aplicar.length} lançado(s) e salvo(s).${b.ambiguos.length?` ${b.ambiguos.length} ambíguo(s) ficaram de fora — lance manualmente.`:""}`);}
+      catch(e){alert(`Erro ao salvar: ${e.message}`);}
+    }});
+  }
+  function importMeters(type){
     const lines=paste.trim().split("\n");
-    const u={...localMd};let matched=0,skipped=0;
+    const b={aplicar:[],aprox:[],ambiguos:[],naoEnc:[]};
     lines.forEach(line=>{
       const cols=line.split("\t");
       if(cols.length<2)return;
       let name,val;
       if(cols.length>=3){
-        // 3+ cols: Date | Name | Value | Photo (original format)
         const c0=cols[0]?.trim().toLowerCase();
         if(c0.includes("data")||c0.includes("pdv")||c0.includes("hora")||c0==="")return;
         name=cols[1]?.trim();val=parseBR(cols[2]);
         if(!isNaN(parseFloat(name))&&val===0){val=parseBR(name);name=cols[0]?.trim();}
       }else{
-        // 2 cols: Name | Value
         const c0=cols[0]?.trim().toLowerCase();
         if(c0.includes("data")||c0.includes("pdv")||c0.includes("hora")||c0.includes("local")||c0==="")return;
         name=cols[0]?.trim();val=parseBR(cols[1]);
       }
-      if(!val||val<=0){skipped++;return;}
-      const mp=findPdv(name);
-      if(mp){u[mp.id]={...(u[mp.id]||{}),[type]:val};matched++;}
-      else{skipped++;}
+      if(!val||val<=0)return;
+      classificar(name,val,b);
     });
-    if(matched===0){alert(`Nenhum PDV encontrado! ${skipped} linhas não combinaram. Verifique se os nomes batem.`);return;}
-    setLocalMd(u);setMd(u);setPaste("");setDirty(0);
-    try{await save(u);setLastSave(new Date().toLocaleTimeString("pt-BR"));alert(`✓ ${matched} PDVs salvos no banco! (${skipped} ignoradas)`);}
-    catch(e){alert(`Importou ${matched} PDVs mas erro ao salvar: ${e.message}`);}
+    abrirConfirmacaoImport(type,type==="meter_start"?"Medidor início":"Medidor fim",b);
   }
 
-  async function importRevenue(){
+  function importRevenue(){
     const lines=paste.trim().split("\n");
-    const u={...localMd};let matched=0,skipped=0;
+    const b={aplicar:[],aprox:[],ambiguos:[],naoEnc:[]};
     for(let i=0;i<lines.length;i++){
       const cols=lines[i].split("\t");if(cols.length<2)continue;
       const name=cols[0]?.trim();const nl=name?.toLowerCase()||"";
@@ -2070,17 +2100,55 @@ function DataEntry({pdvs,md,setMd,period,save}) {
       let rev=0;
       if(cols.length>=4)rev=parseBR(cols[3]);
       if(rev===0){for(let c=1;c<cols.length;c++){const p=parseBR(cols[c]);if(p>rev&&p>10) rev=p;}}
-      const mp=findPdv(name);
-      if(mp&&rev>0){u[mp.id]={...(u[mp.id]||{}),raw_revenue:rev};matched++;}
-      else if(rev>0){skipped++;}
+      if(!(rev>0))continue;
+      classificar(name,rev,b);
     }
-    if(matched===0){alert(`Nenhum PDV encontrado! ${skipped} não combinaram.`);return;}
-    setLocalMd(u);setMd(u);setPaste("");setDirty(0);
-    try{await save(u);setLastSave(new Date().toLocaleTimeString("pt-BR"));alert(`✓ ${matched} PDVs com faturamento salvos no banco! (${skipped} não encontrados)`);}
-    catch(e){alert(`Importou ${matched} PDVs mas erro ao salvar: ${e.message}`);}
+    abrirConfirmacaoImport("raw_revenue","Faturamento",b);
+  }
+  // Botão "Média": preenche o fim dos medidores faltantes com
+  // fim = início do mês atual + consumo do mês anterior + N (N vem da caixa).
+  async function preencherMedia(){
+    if(!activePeriod){alert("Selecione um período primeiro.");return;}
+    const k=p=>p.ano*12+p.mes;
+    const prev=[...(allPeriods||[])].filter(p=>k(p)<k(activePeriod)).sort((a,b)=>k(b)-k(a))[0];
+    if(!prev){alert("Não há período anterior pra basear a média.");return;}
+    const N=parseFloat(mediaInc)||0;
+    setLoadingMedia(true);
+    try{
+      const pdvMap={};pdvs.forEach(p=>{if(p.uuid!=null)pdvMap[p.uuid]=p.id;});
+      const prevMd=await SB.loadMonthlyData(prev.id,pdvMap);
+      const aplicar=[],semAnterior=[];
+      mPdvs.forEach(p=>{
+        const cur=localMd[p.id]||{};
+        const ini=Number(cur.meter_start)||0, fim=Number(cur.meter_end)||0;
+        if(!(ini>0)||fim>0) return; // só quem tem início e está SEM fim
+        const pv=prevMd[p.id]||{};
+        const pIni=Number(pv.meter_start)||0, pFim=Number(pv.meter_end)||0;
+        if(!(pFim>pIni)){ semAnterior.push(`${p.name} (${p.id})`); return; }
+        const consumo=(pFim-pIni)+N;
+        aplicar.push({pid:p.id,nome:p.name,val:Math.round(ini+consumo)});
+      });
+      if(!aplicar.length){alert(`Nenhum medidor pra preencher${semAnterior.length?` (${semAnterior.length} sem dados do mês anterior)`:""}.`);setLoadingMedia(false);return;}
+      const detalhe=aplicar.map(a=>`${a.nome} (${a.pid}) → fim ${a.val}`).join("\n");
+      setConfirmImport({
+        msg:`Preencher o fim de ${aplicar.length} medidor(es) pela média — consumo de ${prev.nome} + ${N} kWh?`,
+        detail:`${detalhe}${semAnterior.length?`\n\nSem dados do mês anterior (${semAnterior.length}) — NÃO preenchidos:\n${semAnterior.slice(0,10).join("\n")}`:""}`,
+        apply:async()=>{
+          const u={...localMd};
+          aplicar.forEach(a=>{u[a.pid]={...(u[a.pid]||{}),meter_end:a.val};});
+          setLocalMd(u);setMd(u);setDirty(0);setConfirmImport(null);
+          try{await save(u);setLastSave(new Date().toLocaleTimeString("pt-BR"));alert(`✓ ${aplicar.length} fim(ns) preenchido(s) pela média e salvo(s).`);}
+          catch(e){alert(`Erro ao salvar: ${e.message}`);}
+        }
+      });
+    }catch(e){alert("Erro ao calcular a média: "+e.message);}
+    setLoadingMedia(false);
   }
 
   return <div className="fade-in">
+    {confirmImport&&<ConfirmModal
+      msg={confirmImport.msg||"Confira antes de salvar."}
+      detail={confirmImport.detail} onConfirm={confirmImport.apply} onCancel={()=>setConfirmImport(null)}/>}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div className="h2">Entrada de dados</div>
       <div style={{display:"flex",gap:10,alignItems:"center"}}>
@@ -2118,6 +2186,19 @@ function DataEntry({pdvs,md,setMd,period,save}) {
           <button className="btn btn-p" onClick={()=>importMeters("meter_end")}>↑ Importar FIM</button>
         </div>
       </div>
+      <div className="card" style={{background:"#eef6ff",border:"1px solid #b8d4f0"}}>
+        <div className="h3" style={{marginBottom:6}}>📊 Preencher FIM por média (faltantes)</div>
+        <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:8}}>
+          Para medidores com <b>início preenchido mas sem fim</b>: calcula <b>fim = início + consumo do mês anterior + N&nbsp;kWh</b>. Útil pra PDV sem medidor no local. Confere a lista antes de salvar.
+        </p>
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          <label style={{fontSize:12,fontWeight:600}}>Acréscimo (kWh):</label>
+          <input type="number" style={{width:80}} value={mediaInc} onFocus={e=>e.target.select()} onChange={e=>setMediaInc(e.target.value)}/>
+          <button className="btn btn-p" disabled={loadingMedia||faltamFim===0} onClick={preencherMedia}
+            style={faltamFim===0?{opacity:0.5,cursor:"not-allowed"}:undefined}>
+            {loadingMedia?"Calculando…":faltamFim>0?`Preencher média (${faltamFim} sem fim)`:"Nenhum sem fim"}</button>
+        </div>
+      </div>
       <div className="card"><div className="h3">Leituras</div>
       <div className="scroll-x"><table><thead><tr>
         <th>PDV</th><th>Início</th><th>Fim</th><th>kWh</th><th>Consumo</th><th>Energia</th>
@@ -2125,7 +2206,7 @@ function DataEntry({pdvs,md,setMd,period,save}) {
         {mPdvs.map(p=>{const d=localMd[p.id]||{};const s=d.meter_start||0;const e=d.meter_end||0;
           const c=e-s;const b=c*(p.kwh_unity_price||0);
           return <tr key={p.id}>
-            <td className="trunc">{p.name}</td>
+            <td className="trunc"><span className="mono" style={{fontSize:10,color:"var(--accent)",marginRight:6}}>{p.id}</span>{p.name}</td>
             <td><input type="number" style={{width:90}} value={s||""} onChange={ev=>upd(p.id,"meter_start",ev.target.value)}/></td>
             <td><input type="number" style={{width:90}} value={e||""} onChange={ev=>upd(p.id,"meter_end",ev.target.value)}/></td>
             <td className="mono" style={{color:"var(--color-text-secondary)"}}>{p.kwh_unity_price||"-"}</td>
@@ -2148,7 +2229,7 @@ function DataEntry({pdvs,md,setMd,period,save}) {
         {rPdvs.map(p=>{const d=localMd[p.id]||{};const raw=d.raw_revenue||0;
           const cr=raw*(p.revenue_consideration==="Bruto"?1:LIQ);const pv=cr*(p.negotiated_percentage||0);
           return <tr key={p.id}>
-            <td className="trunc">{p.name}</td>
+            <td className="trunc"><span className="mono" style={{fontSize:10,color:"var(--accent)",marginRight:6}}>{p.id}</span>{p.name}</td>
             <td><span className={`badge ${p.revenue_consideration==="Bruto"?"badge-warn":"badge-info"}`}>{p.revenue_consideration}</span></td>
             <td><input type="number" style={{width:100}} value={raw||""} onChange={ev=>upd(p.id,"raw_revenue",ev.target.value)}/></td>
             <td className="mono">{raw>0?fmt(cr):"-"}</td>
@@ -2163,7 +2244,7 @@ function DataEntry({pdvs,md,setMd,period,save}) {
       <div className="scroll-x"><table><thead><tr><th>PDV</th><th>Valor</th><th>Descrição</th></tr></thead>
       <tbody>{pdvs.filter(p=>p.contract_type!=="Boleto").map(p=>{const d=localMd[p.id]||{};
         return <tr key={p.id}>
-          <td className="trunc">{p.name}</td>
+          <td className="trunc"><span className="mono" style={{fontSize:10,color:"var(--accent)",marginRight:6}}>{p.id}</span>{p.name}</td>
           <td><input type="number" style={{width:90}} value={d.manual_adjustment||""} onChange={e=>upd(p.id,"manual_adjustment",e.target.value)}/></td>
           <td><input style={{width:180}} value={d.manual_adjustment_desc||""} onChange={e=>updStr(p.id,"manual_adjustment_desc",e.target.value)}/></td>
         </tr>;})}</tbody></table></div>
@@ -2173,7 +2254,7 @@ function DataEntry({pdvs,md,setMd,period,save}) {
       <div className="h3">Contas de energia (condominial)</div>
       <table><thead><tr><th>PDV</th><th>Valor conta</th></tr></thead>
       <tbody>{pdvs.filter(p=>p.contract_type==="Conta de Energia + Percentual do Faturamento").map(p=>{const d=localMd[p.id]||{};
-        return <tr key={p.id}><td>{p.name}</td>
+        return <tr key={p.id}><td><span className="mono" style={{fontSize:10,color:"var(--accent)",marginRight:6}}>{p.id}</span>{p.name}</td>
         <td><input type="number" style={{width:120}} value={d.energy_bill_cond||""} onChange={e=>upd(p.id,"energy_bill_cond",e.target.value)}/></td>
         </tr>;})}</tbody></table>
     </div>}
@@ -4610,7 +4691,7 @@ export default function App() {
           onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
         {page==="conferencia"&&<Conferencia pdvs={pdvs} userRole={userRole}
           onCadastrar={(data)=>{setPrefilledPdv(data);setPage("pdvs");}}/>}
-        {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB}/>}
+        {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB} activePeriod={activePeriod} allPeriods={allPeriods}/>}
         {page==="demo"&&<Demonstrativo pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} md={md} setMd={canEdit?setMd:noSave}
           period={period} activePeriod={activePeriod} allPeriods={allPeriods} onSelectPeriod={handleSelectPeriod}
           savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
