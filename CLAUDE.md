@@ -70,6 +70,16 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   padrão 5). Acha o período anterior por `ano*12+mes`, lê `SB.loadMonthlyData(prev.id, pdvMap)`, pula
   quem não tem dado no mês anterior e confirma no `ConfirmModal` antes de salvar. Ex.: início 1535,
   consumo do mês anterior 511, N=5 → fim 2051. Para PDV sem medidor físico no local (paga média).
+- **E-mail no cadastro do PDV (`PdvForm`):** o formulário tem a seção **"E-mail"** (sempre visível), que
+  lê e grava em **`pdv_emails`** (chave = código/`vmpay_id`) — a mesma base usada no Disparo de e-mail.
+  `PdvManager` carrega o mapa `código → email` no boot (`SB.loadEmails`) e salva com `SB.upsertEmails`
+  junto com o PDV (+ log no `audit_log`, campo "E-mail"). Aceita vários destinatários separados por `;`;
+  e-mail preenchido e mal formatado bloqueia o salvar (igual ao CNPJ). Ao **criar** PDV, e-mail vazio
+  **não** apaga um e-mail já existente para aquele código. Fluxo `usuario`: vira `change_requests`
+  (`pdv_create` leva o e-mail no `payload`; edição vira um `pdv_edit` com `campo="email"`), e o
+  `reviewReq` do admin aplica esse caso via `upsertEmails` — nunca via `patchPdv` (não é coluna de `pdvs`).
+- **Dados bancários abrem expandidos:** no `PdvForm` o `<details>` de "Dados bancários" tem o atributo
+  **`open`** — ao abrir Novo/Editar PDV a seção já aparece preenchida, sem precisar clicar.
 - **Papéis** (`user_roles.role`): `master`, `admin`, `usuario`, `view`, `pendente`.
   Cada página do menu tem sua lista de papéis permitidos.
 

@@ -1621,6 +1621,8 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
   const [ignorados,setIgnorados]=useState(new Set());
   // Códigos com cadastro PENDENTE de aprovação — também saem do dropdown (voltam se recusado)
   const [pendentesCriacao,setPendentesCriacao]=useState(new Set());
+  // E-mail por código (tabela pdv_emails) — mesmo dado usado no Disparo de e-mail
+  const [emails,setEmails]=useState({});
   useEffect(()=>{(async()=>{
     try{const l=await SB.loadSyncLocais();setSyncLocais(l||[]);}
     catch(e){console.error("loadSyncLocais",e);}
@@ -1628,6 +1630,8 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     catch(e){console.error("loadIgnored",e);}
     try{const pc=await SB.loadPendingPdvCreateCodes();setPendentesCriacao(new Set(pc));}
     catch(e){console.error("loadPendingPdvCreateCodes",e);}
+    try{const el=await SB.loadEmails();const m={};(el||[]).forEach(x=>{m[String(x.vmpay_id)]=x.email||"";});setEmails(m);}
+    catch(e){console.error("loadEmails",e);}
   })();},[]);
   // Conjunto de códigos já cadastrados (para negar duplicado). Exclui o que está sendo editado.
   const codigosCadastrados=new Set(pdvs.map(p=>String(p.id||"").trim()).filter(Boolean));
@@ -1660,7 +1664,11 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     setShowForm(false);setEditing(null);setFormInitData(null);
     if(onPrefilledHandled) onPrefilledHandled();
   }
-  function savePdv(f){
+  function savePdv(f,em){
+    // E-mail vive em pdv_emails (chave = código), fora da tabela pdvs.
+    const codEmail=String(f.id||"").trim();
+    const emNovo=String(em??"").trim();
+    const emAtual=String(emails[codEmail]||"").trim();
     // Trava de duplicado: ao criar (não editar), o código não pode já existir.
     if(editing===null){
       const cod=String(f.id||"").trim();
@@ -1682,10 +1690,11 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
       if(isCreating){
         // Single request with full payload
         reqs.push({tipo:"pdv_create",pdv_vmpay_id:String(f.id||""),pdv_nome:f.name||"",
-          campo:"(novo PDV)",valor_atual:"",valor_novo:f.name||"",payload:f,
+          campo:"(novo PDV)",valor_atual:"",valor_novo:f.name||"",payload:{...f,email:emNovo},
           requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",
           requester_id:userRole?.user_id||null});
         changesSummary.push(`Novo PDV: ${f.name} (ID ${f.id||"sem ID"}) - ${f.contract_type}`);
+        if(emNovo) changesSummary.push(`E-mail: ${emNovo}`);
       }else{
         // Generate one request per changed field
         Object.keys(fieldLabelMap).forEach(k=>{
@@ -1697,6 +1706,14 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
             changesSummary.push(`${fieldLabelMap[k]}: ${orig[k]||"(vazio)"} → ${f[k]||"(vazio)"}`);
           }
         });
+        // E-mail não é campo da tabela pdvs — vai como solicitação própria (campo "email").
+        if(emNovo!==emAtual){
+          reqs.push({tipo:"pdv_edit",pdv_vmpay_id:String(orig.id||""),pdv_nome:orig.name||"",
+            campo:"email",valor_atual:emAtual,valor_novo:emNovo,
+            requester_email:userRole?.email||"",requester_nome:userRole?.nome||"",
+            requester_id:userRole?.user_id||null});
+          changesSummary.push(`E-mail: ${emAtual||"(vazio)"} → ${emNovo||"(vazio)"}`);
+        }
       }
       if(reqs.length===0){closeForm();return;}
       setJustify({changeCount:reqs.length,detail:changesSummary.join("\n"),
@@ -1711,7 +1728,16 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     }
     // Admin/Master flow: save directly
     const u=editing!==null?pdvs.map((p,i)=>i===editing?{...pdvs[editing],...f}:p):[...pdvs,f];
-    setPdvs(u);save(u);closeForm();
+    setPdvs(u);save(u);
+    // Ao CRIAR, e-mail vazio não apaga um e-mail que já exista para o código (o form novo não pré-carrega).
+    if(codEmail&&emNovo!==emAtual&&(emNovo||editing!==null)){
+      setEmails(m=>({...m,[codEmail]:emNovo}));
+      SB.upsertEmails([{vmpay_id:codEmail,local:f.name||"",email:emNovo}])
+        .then(()=>audit("Editou cadastro PDV",{entidade:"PDV",entidade_nome:f.name||"",campo:"E-mail",
+          valor_antigo:emAtual,valor_novo:emNovo,descricao:`Código ${codEmail}`}))
+        .catch(e=>{console.error("upsertEmails",e);alert("PDV salvo, mas houve erro ao salvar o e-mail: "+(e.message||e));});
+    }
+    closeForm();
   }
   async function del(idx){
     const p=pdvs[idx];
@@ -1756,7 +1782,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     </div>}
     <input placeholder="Buscar por nome, ID ou tipo..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:14}}/>
     {/* Form de NOVO PDV fica no topo; edição aparece inline na tabela (abaixo da linha) */}
-    {showForm&&editing===null&&<PdvForm key={formPdv.id||"new"} pdv={formPdv} onSave={savePdv} onCancel={closeForm}
+    {showForm&&editing===null&&<PdvForm key={formPdv.id||"new"} pdv={formPdv} email={emails[String(formPdv.id||"")]||""} onSave={savePdv} onCancel={closeForm}
       isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} ignorados={ignorados} pendentes={pendentesCriacao} isEdit={false}/>}
     <div className="scroll-x">
       <table><thead><tr>
@@ -1781,7 +1807,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
         </tr>
           {isEditingThis&&<tr><td colSpan={8} style={{padding:0,background:"var(--accent-bg)"}}>
             <div style={{padding:"4px 8px 12px"}}>
-              <PdvForm key={"edit-"+(p.id||ri)} pdv={pdvs[ri]} onSave={savePdv} onCancel={closeForm}
+              <PdvForm key={"edit-"+(p.id||ri)} pdv={pdvs[ri]} email={emails[String(p.id||"")]||""} onSave={savePdv} onCancel={closeForm}
                 isUsuario={isUsuario} syncLocais={syncLocais} codigosCadastrados={codigosCadastrados} ignorados={ignorados} pendentes={pendentesCriacao} isEdit={true}/>
             </div>
           </td></tr>}
@@ -1792,8 +1818,9 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
   </div>;
 }
 
-function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados=new Set(),ignorados=new Set(),pendentes=new Set(),isEdit=false}) {
+function PdvForm({pdv,email="",onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados=new Set(),ignorados=new Set(),pendentes=new Set(),isEdit=false}) {
   const [f,sf]=useState({...pdv});
+  const [em,setEm]=useState(email||""); // e-mail do PDV (pdv_emails), salvo junto com o cadastro
   const s=(k,v)=>sf(o=>({...o,[k]:v}));
   const [dupWarn,setDupWarn]=useState("");
   const [showList,setShowList]=useState(false); // dropdown do campo Nome aberto?
@@ -1846,7 +1873,10 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
   // CNPJ inválido só bloqueia se estiver preenchido (vazio é permitido).
   const cnpjCondBad=(f.bank_cnpj_cond||"").replace(/\D/g,"").length>0 && !isValidCNPJ(f.bank_cnpj_cond);
   const cnpjContaBad=(f.bank_cnpj||"").replace(/\D/g,"").length>0 && !isValidCNPJ(f.bank_cnpj);
-  const bloqueiaSalvar=(!isEdit && !!dupWarn) || cnpjCondBad || cnpjContaBad;
+  // E-mail só bloqueia se estiver preenchido e mal formatado (vários separados por ";").
+  const emailParts=(em||"").split(";").map(x=>x.trim()).filter(Boolean);
+  const emailBad=emailParts.length>0 && !emailParts.every(x=>/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/.test(x));
+  const bloqueiaSalvar=(!isEdit && !!dupWarn) || cnpjCondBad || cnpjContaBad || emailBad;
 
   return <div className="card fade-in" style={{border:"2px solid var(--accent)",marginBottom:16}}>
     <div className="h3">{isEdit?"Editar":"Novo"} PDV {isUsuario&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>(sujeito a aprovação)</span>}</div>
@@ -1911,7 +1941,18 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
       <Field label="Mínimo"><input type="number" step="0.01" placeholder="0" value={f.minimal_repass||""} onFocus={e=>e.target.select()} onChange={e=>s("minimal_repass",parseFloat(e.target.value)||0)}/></Field>
       <Field label="Dia pgto"><input type="number" value={f.payment_day} onFocus={e=>e.target.select()} onChange={e=>s("payment_day",parseInt(e.target.value)||20)}/></Field>
     </div>
-    <details style={{marginTop:12}}>
+    <div style={{marginTop:12}}>
+      <div style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:10}}>E-mail</div>
+      <div className="grid3">
+        <Field label="E-mail do PDV"><input type="text" value={em||""} autoComplete="off" placeholder="condominio@exemplo.com.br"
+          onChange={e=>setEm(e.target.value)}
+          style={emailBad?{borderColor:"var(--red)",boxShadow:"0 0 0 2px var(--red-bg)"}:undefined}/>
+          {emailBad?<div style={{fontSize:10,color:"var(--red)",marginTop:3,fontWeight:600}}>E-mail inválido — confira o endereço</div>
+            :<div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:3}}>Usado no Disparo de e-mail. Mais de um destinatário: separe por ponto-e-vírgula (;).</div>}</Field>
+      </div>
+    </div>
+    {/* Dados bancários ficam SEMPRE abertos (open) — a pessoa não precisa clicar para ver/editar. */}
+    <details open style={{marginTop:12}}>
       <summary style={{cursor:"pointer",fontSize:12,fontWeight:600,color:"var(--color-text-secondary)"}}>Dados bancários {!isEdit&&f.id&&<span style={{fontWeight:400,color:"var(--color-text-tertiary)"}}>· código {f.id}</span>}</summary>
       <div className="grid3" style={{marginTop:10}}>
         <Field label="CNPJ Cond."><input value={f.bank_cnpj_cond||""} placeholder="00.000.000/0000-00" onChange={e=>s("bank_cnpj_cond",maskCNPJ(e.target.value))}
@@ -1928,8 +1969,9 @@ function PdvForm({pdv,onSave,onCancel,isUsuario,syncLocais=[],codigosCadastrados
       </div>
     </details>
     {(cnpjCondBad||cnpjContaBad)&&<div style={{fontSize:11,color:"var(--red)",marginTop:10,fontWeight:600}}>⚠ Corrija o CNPJ em “Dados bancários” para poder salvar.</div>}
+    {emailBad&&<div style={{fontSize:11,color:"var(--red)",marginTop:10,fontWeight:600}}>⚠ Corrija o e-mail para poder salvar.</div>}
     <div style={{marginTop:12,display:"flex",gap:8}}>
-      <button className="btn btn-p" disabled={bloqueiaSalvar} onClick={()=>{if(!bloqueiaSalvar)onSave(f);}}
+      <button className="btn btn-p" disabled={bloqueiaSalvar} onClick={()=>{if(!bloqueiaSalvar)onSave(f,em);}}
         style={bloqueiaSalvar?{opacity:0.5,cursor:"not-allowed"}:undefined}>{isUsuario?"📩 Enviar solicitação":"Salvar"}</button>
       <button className="btn btn-s" onClick={onCancel}>Cancelar</button>
     </div>
@@ -3288,7 +3330,11 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
         if(req.tipo==="pdv_create"){
           // Create a new PDV from the payload
           if(!req.payload) throw new Error("Solicitação sem dados do novo PDV");
-          await SB.createPdv(req.payload);
+          await SB.createPdv(req.payload); // createPdv ignora chaves extras (ex.: email)
+          // E-mail vem no payload mas mora em pdv_emails (chave = código), não em pdvs.
+          const emNovo=String(req.payload.email||"").trim();
+          if(emNovo) await SB.upsertEmails([{vmpay_id:String(req.payload.id||req.pdv_vmpay_id||""),
+            local:req.payload.name||req.pdv_nome||"",email:emNovo}]);
         }else if(req.tipo==="pdv_delete"){
           // Delete the PDV by uuid (stored in payload) or by looking up vmpay_id
           let uuid=req.payload?.uuid;
@@ -3299,10 +3345,16 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
           }
           await SB.deletePdv(uuid);
         }else if(req.tipo==="pdv_edit"){
-          const targetPdv=allPdvs.find(p=>String(p.id)===String(req.pdv_vmpay_id));
-          if(!targetPdv||!targetPdv.uuid) throw new Error("PDV não encontrado para aplicar alteração");
-          const fieldKey=req.campo==="name"?"nome":req.campo;
-          await SB.patchPdv(targetPdv.uuid,{[fieldKey]:parsedVal});
+          if(req.campo==="email"){
+            // E-mail não é coluna de pdvs — grava em pdv_emails pelo código.
+            await SB.upsertEmails([{vmpay_id:String(req.pdv_vmpay_id||""),local:req.pdv_nome||"",
+              email:String(req.valor_novo||"").trim()}]);
+          }else{
+            const targetPdv=allPdvs.find(p=>String(p.id)===String(req.pdv_vmpay_id));
+            if(!targetPdv||!targetPdv.uuid) throw new Error("PDV não encontrado para aplicar alteração");
+            const fieldKey=req.campo==="name"?"nome":req.campo;
+            await SB.patchPdv(targetPdv.uuid,{[fieldKey]:parsedVal});
+          }
         }else if(req.tipo==="md_edit"){
           if(!req.periodo_id) throw new Error("Solicitação antiga sem período associado — não é possível aplicar automaticamente. Aplique manualmente em Entrada de dados.");
           const targetPdv=allPdvs.find(p=>String(p.id)===String(req.pdv_vmpay_id));
