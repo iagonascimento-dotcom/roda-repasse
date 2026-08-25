@@ -142,12 +142,29 @@ const SB = {
     return {"apikey":SB_KEY,"Content-Type":"application/json",
       "Authorization":`Bearer ${this.token||SB_KEY}`,...extra};
   },
-  async api(path,opts={}){
+  async api(path,opts={},_retry=false){
     const r=await fetch(`${SB_URL}${path}`,{...opts,headers:this.headers(opts.headers||{})});
-    if(!r.ok){const t=await r.text();throw new Error(t);}
+    if(!r.ok){
+      const t=await r.text();
+      // Token de sessao vencido (PGRST303 "JWT expired" / 401): renova uma vez e repete o request.
+      if(!_retry&&(r.status===401||t.includes("JWT expired")||t.includes("PGRST303"))&&await this.tryRefresh())
+        return this.api(path,opts,true);
+      throw new Error(t);
+    }
     const ct=r.headers.get("content-type")||"";
     if(ct.includes("json")){const j=await r.json();return j;}
     return null;
+  },
+  // Renova o access_token pelo refresh_token guardado (localStorage). Chamado pelo api() quando o
+  // JWT expira e por um timer periodico, pra pagina aberta > 1h nao quebrar os salvamentos.
+  async tryRefresh(){
+    try{
+      const s=await tokenGet();
+      if(!s||!s.refresh_token)return false;
+      const d=await this.refreshToken(s.refresh_token);
+      await tokenSet({access_token:d.access_token,refresh_token:d.refresh_token});
+      return true;
+    }catch(e){return false;}
   },
   /* Auth */
   async signIn(email,pw){
@@ -3760,6 +3777,7 @@ function DisparoEmail({pdvs, md, period, activePeriod}){
   const [importText,setImportText]=useState("");
   const [showImport,setShowImport]=useState(false);
   const [msg,setMsg]=useState("");
+  const [confirmImport,setConfirmImport]=useState(null); // conferencia antes de salvar e-mails
 
   // Carrega e-mails do banco ao montar
   useEffect(()=>{(async()=>{
@@ -3816,38 +3834,53 @@ function DisparoEmail({pdvs, md, period, activePeriod}){
     setRows(rs=>rs.map((r,i)=>i===ri?{...r,[col]:val}:r));
   }
 
-  async function importarEmails(){
+  // Extrai codigo + email de uma linha tolerando TAB, ; , ou ESPACOS (nome com espaco nao atrapalha):
+  // codigo = primeiro token; email = o token que tem "@". O nome vem do cadastro, nao do texto colado.
+  function parseEmailLine(ln){
+    const raw=(ln||"").trim();if(!raw)return null;
+    const em=raw.match(/[^\s;,]+@[^\s;,]+/);
+    const email=em?em[0].replace(/[.,;]+$/,"").trim():"";
+    const cod=(raw.split(/[\t;,\s]+/)[0]||"").trim();
+    return {cod,email};
+  }
+  function importarEmails(){
     if(!importText.trim()){setMsg("Cole a lista primeiro.");return;}
-    setImporting(true);setMsg("");
-    try{
-      // Aceita TSV (colado do Excel) ou CSV. Espera Código | Local | Email
-      const lines=importText.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-      const items=[];
-      for(const ln of lines){
-        const parts=ln.split(/\t|;|,/).map(s=>s.trim());
-        if(parts.length<2)continue;
-        const cod=parts[0];
-        if(/^c[óo]digo/i.test(cod))continue; // pula cabeçalho
-        // último campo com @ é o email; código é o primeiro
-        let email="",local="";
-        if(parts.length>=3){local=parts[1];email=parts[2];}
-        else{email=parts[1];}
-        if(!cod)continue;
-        items.push({vmpay_id:cod,local,email});
+    const validSet=new Set((pdvs||[]).map(p=>String(p.id).trim()));
+    const nomeDe=c=>{const p=(pdvs||[]).find(x=>String(x.id)===String(c));return p?p.name:"";};
+    const lines=importText.split(/\r?\n/);
+    const casar=[],semCod=[],semEmail=[];
+    for(const ln of lines){
+      if(/^\s*c[óo]digo/i.test(ln))continue;                  // pula cabecalho
+      const p=parseEmailLine(ln);if(!p||!p.cod)continue;
+      if(!p.email){semEmail.push(p.cod);continue;}
+      if(validSet.has(String(p.cod))) casar.push({vmpay_id:p.cod,email:p.email});
+      else semCod.push(`${p.cod} → ${p.email}`);
+    }
+    // dedup por codigo (ultimo vence)
+    const uniq=new Map();casar.forEach(i=>uniq.set(String(i.vmpay_id),i));
+    const items=[...uniq.values()];
+    if(!items.length){
+      setMsg(`Nenhum codigo do cadastro casou.${semCod.length?` ${semCod.length} codigo(s) fora do cadastro.`:""}${semEmail.length?` ${semEmail.length} linha(s) sem e-mail.`:""}`);
+      return;
+    }
+    const detalhe=items.map(i=>`${i.vmpay_id}  ${nomeDe(i.vmpay_id)}  →  ${i.email}`).join("\n")
+      +(semCod.length?`\n\n⛔ Codigo NAO cadastrado (fica de fora):\n${semCod.slice(0,12).join("\n")}${semCod.length>12?"\n…":""}`:"")
+      +(semEmail.length?`\n\n(${semEmail.length} linha[s] sem e-mail valido)`:"");
+    setConfirmImport({
+      msg:`Salvar ${items.length} e-mail(s), casados pelo codigo do cadastro?${semCod.length?` ${semCod.length} codigo(s) fora do cadastro ficam de fora.`:""}`,
+      detail:detalhe,
+      apply:async()=>{
+        setImporting(true);setMsg("");setConfirmImport(null);
+        try{
+          await SB.upsertEmails(items.map(i=>({vmpay_id:i.vmpay_id,local:nomeDe(i.vmpay_id),email:i.email})));
+          const m={...emails};items.forEach(i=>{m[String(i.vmpay_id)]=i.email;});setEmails(m);
+          setRows(rs=>rs.map(r=>({...r,Email:m[String(r["Código do Local"])]??r.Email})));
+          setMsg(`✓ ${items.length} e-mail(s) salvos no banco.${semCod.length?` ${semCod.length} fora do cadastro ignorado(s).`:""}`);
+          setImportText("");setShowImport(false);
+        }catch(e){console.error(e);setMsg("Erro ao importar: "+e.message);}
+        setImporting(false);
       }
-      if(!items.length){setMsg("Nenhuma linha válida encontrada.");setImporting(false);return;}
-      await SB.upsertEmails(items);
-      // Atualiza estado local
-      const m={...emails};items.forEach(i=>{m[String(i.vmpay_id)]=i.email;});
-      setEmails(m);
-      // Reaplica nos rows já gerados
-      setRows(rs=>rs.map(r=>({...r,Email:m[String(r["Código do Local"])]??r.Email})));
-      const unicos=new Set(items.map(i=>String(i.vmpay_id).trim())).size;
-      const dups=items.length-unicos;
-      setMsg(`${unicos} e-mail(s) importado(s) e salvos no banco.${dups>0?` (${dups} código(s) repetido(s) na lista — manteve o último)`:""}`);
-      setImportText("");setShowImport(false);
-    }catch(e){console.error(e);setMsg("Erro ao importar: "+e.message);}
-    setImporting(false);
+    });
   }
 
   function exportar(){
@@ -3874,6 +3907,8 @@ function DisparoEmail({pdvs, md, period, activePeriod}){
   const comEmail=rows.filter(r=>r.Email).length;
 
   return <div className="fade-in">
+    {confirmImport&&<ConfirmModal msg={confirmImport.msg} detail={confirmImport.detail}
+      onConfirm={confirmImport.apply} onCancel={()=>setConfirmImport(null)}/>}
     <div className="h2" style={{marginBottom:6}}>✉ Disparo de E-mail</div>
     <div style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:14}}>
       Gere o template do período {period?`(${period})`:""}, revise/edite os valores e baixe. As edições aqui valem só para o arquivo baixado — não alteram o banco. Os e-mails ficam salvos e são reusados todo mês.
@@ -3899,7 +3934,7 @@ function DisparoEmail({pdvs, md, period, activePeriod}){
     {showImport&&<div className="card" style={{marginBottom:14}}>
       <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>Importar e-mails em lote</div>
       <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:8}}>
-        Cole as colunas <b>Código do Local</b>, <b>Local</b> e <b>Email</b> (copiadas do Excel ou separadas por vírgula/ponto-e-vírgula). Uma linha por PDV. Casa pelo Código do Local. Salva no banco e reutiliza nos próximos meses.
+        Cole <b>Código</b> e <b>Email</b> (uma linha por PDV). Aceita colado do Excel (TAB), vírgula, ponto-e-vírgula <b>ou espaços</b> — o nome no meio não atrapalha. Casa pelo <b>Código</b> do cadastro (mostra uma conferência antes de salvar) e ignora código que não existe. Fica salvo e reusa nos próximos meses.
       </div>
       <textarea value={importText} onChange={e=>setImportText(e.target.value)}
         placeholder={"22565\tMM RODA SÃO CRISTOVÃO\tpedro@exemplo.com\n13386\tMC QUEEN ELIZABETH\tcontato@exemplo.com"}
@@ -4066,6 +4101,13 @@ export default function App() {
     })();
     return ()=>clearTimeout(timeout);
   },[]);
+
+  /* ─── Renovacao periodica do token: sessao longa (pagina aberta > 1h) nao quebra os salvamentos ─── */
+  useEffect(()=>{
+    if(!authed)return;
+    const id=setInterval(()=>{SB.tryRefresh();},45*60*1000); // a cada 45 min (o access_token dura ~1h)
+    return ()=>clearInterval(id);
+  },[authed]);
 
   /* ─── Load data when authenticated ─── */
   useEffect(()=>{
