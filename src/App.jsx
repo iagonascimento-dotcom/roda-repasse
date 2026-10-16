@@ -1890,8 +1890,9 @@ function PdvForm({pdv,email="",onSave,onCancel,isUsuario,syncLocais=[],codigosCa
   // CNPJ inválido só bloqueia se estiver preenchido (vazio é permitido).
   const cnpjCondBad=(f.bank_cnpj_cond||"").replace(/\D/g,"").length>0 && !isValidCNPJ(f.bank_cnpj_cond);
   const cnpjContaBad=(f.bank_cnpj||"").replace(/\D/g,"").length>0 && !isValidCNPJ(f.bank_cnpj);
-  // E-mail só bloqueia se estiver preenchido e mal formatado (vários separados por ";").
-  const emailParts=(em||"").split(";").map(x=>x.trim()).filter(Boolean);
+  // E-mail só bloqueia se estiver preenchido e mal formatado (vários separados por VÍRGULA).
+  // O separador tem de ser "," — ponto-e-vírgula quebra o sistema de disparo na exportação.
+  const emailParts=(em||"").split(",").map(x=>x.trim()).filter(Boolean);
   const emailBad=emailParts.length>0 && !emailParts.every(x=>/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/.test(x));
   const bloqueiaSalvar=(!isEdit && !!dupWarn) || cnpjCondBad || cnpjContaBad || emailBad;
 
@@ -1962,10 +1963,10 @@ function PdvForm({pdv,email="",onSave,onCancel,isUsuario,syncLocais=[],codigosCa
       <div style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:10}}>E-mail</div>
       <div className="grid3">
         <Field label="E-mail do PDV"><input type="text" value={em||""} autoComplete="off" placeholder="condominio@exemplo.com.br"
-          onChange={e=>setEm(e.target.value)}
+          onChange={e=>setEm(e.target.value.replace(/;/g,","))}
           style={emailBad?{borderColor:"var(--red)",boxShadow:"0 0 0 2px var(--red-bg)"}:undefined}/>
           {emailBad?<div style={{fontSize:10,color:"var(--red)",marginTop:3,fontWeight:600}}>E-mail inválido — confira o endereço</div>
-            :<div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:3}}>Usado no Disparo de e-mail. Mais de um destinatário: separe por ponto-e-vírgula (;).</div>}</Field>
+            :<div style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:3}}>Usado no Disparo de e-mail. Mais de um destinatário: separe por vírgula (,).</div>}</Field>
       </div>
     </div>
     {/* Dados bancários ficam SEMPRE abertos (open) — a pessoa não precisa clicar para ver/editar. */}
@@ -1988,7 +1989,7 @@ function PdvForm({pdv,email="",onSave,onCancel,isUsuario,syncLocais=[],codigosCa
     {(cnpjCondBad||cnpjContaBad)&&<div style={{fontSize:11,color:"var(--red)",marginTop:10,fontWeight:600}}>⚠ Corrija o CNPJ em “Dados bancários” para poder salvar.</div>}
     {emailBad&&<div style={{fontSize:11,color:"var(--red)",marginTop:10,fontWeight:600}}>⚠ Corrija o e-mail para poder salvar.</div>}
     <div style={{marginTop:12,display:"flex",gap:8}}>
-      <button className="btn btn-p" disabled={bloqueiaSalvar} onClick={()=>{if(!bloqueiaSalvar)onSave(f,em);}}
+      <button className="btn btn-p" disabled={bloqueiaSalvar} onClick={()=>{if(!bloqueiaSalvar)onSave(f,emailParts.join(", "));}}
         style={bloqueiaSalvar?{opacity:0.5,cursor:"not-allowed"}:undefined}>{isUsuario?"📩 Enviar solicitação":"Salvar"}</button>
       <button className="btn btn-s" onClick={onCancel}>Cancelar</button>
     </div>
@@ -3859,7 +3860,8 @@ function DisparoEmail({pdvs, md, period, activePeriod}){
     return {
       "Código do Local":p.id||"",
       "Local":p.name||"",
-      "Email":emails[String(p.id)]||"",
+      // Separador obrigatorio na planilha e VIRGULA — ";" quebra o disparo. Converte registro antigo.
+      "Email":(emails[String(p.id)]||"").replace(/\s*;\s*/g,", "),
       "Tipo de Repasse":ct,
       "Enviar Comprovante":enviar,
       "Consumo Inicio do Periodo":hasMeter&&ms?ms:"",
