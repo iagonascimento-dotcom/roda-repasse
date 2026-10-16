@@ -73,8 +73,11 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
 - **E-mail no cadastro do PDV (`PdvForm`):** o formulário tem a seção **"E-mail"** (sempre visível), que
   lê e grava em **`pdv_emails`** (chave = código/`vmpay_id`) — a mesma base usada no Disparo de e-mail.
   `PdvManager` carrega o mapa `código → email` no boot (`SB.loadEmails`) e salva com `SB.upsertEmails`
-  junto com o PDV (+ log no `audit_log`, campo "E-mail"). Aceita vários destinatários separados por `;`;
-  e-mail preenchido e mal formatado bloqueia o salvar (igual ao CNPJ). Ao **criar** PDV, e-mail vazio
+  junto com o PDV (+ log no `audit_log`, campo "E-mail"). **Separador de múltiplos destinatários é
+  VÍRGULA (`,`), nunca ponto-e-vírgula** — o `;` quebra o sistema de disparo que consome a planilha
+  exportada. O campo troca `;` por `,` sozinho ao digitar/colar, salva normalizado (`a@x.com, b@y.com`)
+  e o `buildRow` do `DisparoEmail` ainda converte `;` → `, ` na exportação (rede de segurança para
+  registros antigos). E-mail preenchido e mal formatado bloqueia o salvar (igual ao CNPJ). Ao **criar** PDV, e-mail vazio
   **não** apaga um e-mail já existente para aquele código. Fluxo `usuario`: vira `change_requests`
   (`pdv_create` leva o e-mail no `payload`; edição vira um `pdv_edit` com `campo="email"`), e o
   `reviewReq` do admin aplica esse caso via `upsertEmails` — nunca via `patchPdv` (não é coluna de `pdvs`).
