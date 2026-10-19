@@ -2,3 +2,9 @@ node_modules
 dist
 .DS_Store
 *.local
+
+# Relatorios gerados (xlsx/csv). O repositorio e PUBLICO: planilha de repasse,
+# dados bancarios ou e-mails de PDV nunca entram em commit.
+*.xlsx
+*.xlsm
+*.csv
