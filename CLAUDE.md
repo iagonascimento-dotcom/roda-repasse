@@ -87,11 +87,13 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   para os PDVs com MCR (aparelho que automatiza o ar-condicionado e derruba o consumo). Em modo MCR,
   `passesFilters` exige `mcrSet.has(id)`, então cards, Top 10, comparação e tabela já saem filtrados, e
   aparece o `McrPanel`. Estado em `localStorage` `dash-view`.
-- **`McrPanel` (evolução mês a mês):** carrega, uma vez ao entrar no modo, `SB.loadMonthlyData` +
-  `onLoadPeriodResults` de **todos** os períodos (estado `mcrSerie`). Só entram PDVs de contrato com
-  **Medidor** e com `meter_end > meter_start` no mês. Mostra KPIs do último mês, variação do consumo
-  **médio por PDV** de cada grupo (com e sem MCR) desde o primeiro mês, gráfico de linhas em SVG puro
-  (sem biblioteca) com hover, tabela mês a mês e ranking de maiores quedas/altas por PDV.
+- **`McrPanel` (evolução mês a mês):** carrega, uma vez ao entrar no modo, `onLoadPeriodResults` de
+  **todos** os períodos (estado `mcrSerie`). A métrica é **energia em R$** (`energyBill` do resultado =
+  consumo × preço do kWh), **não kWh** — foi pedido assim. Só entram PDVs de contrato com **Medidor** e
+  com `energyBill > 0` no mês. Mostra KPIs do último mês, variação da energia **média por PDV** de cada
+  grupo (com e sem MCR) desde o primeiro mês, gráfico de linhas em SVG puro (sem biblioteca) com hover,
+  tabela mês a mês e ranking de maiores quedas/altas por PDV. Como é R$ e não kWh, mudança no
+  `kwh_unity_price` do cadastro também move a linha.
   **Comparar o médio por PDV dos dois grupos é proposital:** neutraliza calor e entrada de PDV novo.
   Não é antes/depois — **a tabela `mcr` não guarda data de instalação**, então o efeito do aparelho não
   é isolável hoje. Cores do gráfico `#2176B6` (com MCR) e `#E07400` (sem MCR), validadas para daltonismo
