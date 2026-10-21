@@ -913,6 +913,185 @@ function ResetPasswordScreen({token,onDone}){
 }
 
 /* ─── Dashboard ─── */
+/* ─── Painel MCR: evolução mês a mês do consumo e do repasse dos PDVs com o aparelho ───
+   O MCR automatiza o ar-condicionado e derruba o consumo, então o indicador que importa é
+   kWh, não reais. Como não existe data de instalação gravada, não dá para fazer antes/depois
+   por PDV; o jeito honesto de enxergar efeito é comparar o consumo MÉDIO POR PDV do grupo com
+   MCR contra o grupo sem MCR, que neutraliza calor, feriado e entrada de PDV novo.
+   Cores validadas para daltonismo e contraste (azul #2176B6 / laranja #E07400). */
+const MCR_AZUL="#2176B6", MCR_LARANJA="#E07400";
+const mesCurto=n=>{const [m,a]=String(n||"").split(" ");return (m||"").slice(0,3)+"/"+(a||"").slice(-2);};
+const kwh=v=>new Intl.NumberFormat("pt-BR",{maximumFractionDigits:0}).format(v||0);
+function McrPanel({serie,loading,pdvs,mcrSet}){
+  const [hov,setHov]=useState(null);
+  if(loading||!serie) return <div className="card" style={{textAlign:"center",padding:28,color:"var(--color-text-secondary)",fontSize:13}}>
+    ❄️ carregando a evolução dos PDVs com MCR…</div>;
+
+  // Só PDV de medidor entra: é onde o consumo é medido e onde o MCR muda o repasse.
+  const comMedidor=pdvs.filter(p=>String(p.contract_type||"").includes("Medidor"));
+  const L=serie.map(({per,dm,res})=>{
+    let kM=0,nM=0,kS=0,nS=0;
+    comMedidor.forEach(p=>{
+      const d=dm[String(p.id)];if(!d)return;
+      const c=(Number(d.meter_end)||0)-(Number(d.meter_start)||0);
+      if(!(c>0))return;                                   // sem leitura fechada, fica de fora
+      if(mcrSet.has(String(p.id))){kM+=c;nM++;}else{kS+=c;nS++;}
+    });
+    let rep=0,ene=0,nRes=0;
+    (res||[]).forEach(r=>{if(mcrSet.has(String(r.id))){rep+=r.total||0;ene+=r.energyBill||0;nRes++;}});
+    return {nome:per.nome,curto:mesCurto(per.nome),fechado:per.status==="fechado",
+      kM,nM,kS,nS,medM:nM?kM/nM:0,medS:nS?kS/nS:0,rep,ene,nRes};
+  }).filter(l=>l.nM>0);
+
+  if(L.length===0) return <div className="card" style={{padding:20,fontSize:13,color:"var(--color-text-secondary)"}}>
+    ❄️ Nenhum PDV com MCR tem leitura de medidor fechada ainda. O painel aparece assim que houver medidor com início e fim no mês.</div>;
+
+  const ult=L[L.length-1], ant=L.length>1?L[L.length-2]:null, pri=L[0];
+  const varPct=(a,b)=>(b&&b!==0)?((a-b)/b*100):null;
+  const vConsumo=ant?varPct(ult.kM,ant.kM):null;
+  const vMedia=ant?varPct(ult.medM,ant.medM):null;
+  const seta=v=>v==null?"":v>0.05?"▲":v<-0.05?"▼":"=";
+  const corVar=v=>v==null?"var(--color-text-secondary)":v>0.05?"var(--red)":v<-0.05?"#1a7f37":"var(--color-text-secondary)";
+  const txtVar=v=>v==null?"sem mês anterior":`${seta(v)} ${Math.abs(v).toFixed(1)}% vs ${ant.curto}`;
+  // Desde o primeiro mês da janela, por grupo (é a leitura de efeito)
+  const deltaM=L.length>1?varPct(ult.medM,pri.medM):null;
+  const deltaS=L.length>1?varPct(ult.medS,pri.medS):null;
+
+  // ── Gráfico de linhas: consumo médio por PDV. Mesma unidade nas duas séries, um eixo só. ──
+  const W=720,H=250,ml=56,mr=18,mt=16,mb=34;
+  const n=L.length, iw=W-ml-mr, ih=H-mt-mb;
+  const X=i=>n<2?ml+iw/2:ml+i*iw/(n-1);
+  // Escala com números redondos no eixo (400, 800, 1200…), não 1.088 e 1.450
+  const niceStep=v=>{if(!(v>0))return 1;const e=Math.pow(10,Math.floor(Math.log10(v)));const m=v/e;
+    return (m<=1?1:m<=1.5?1.5:m<=2?2:m<=2.5?2.5:m<=3?3:m<=4?4:m<=5?5:m<=8?8:10)*e;};
+  const pico=Math.max(...L.map(l=>Math.max(l.medM,l.medS)))||1;
+  const passo=niceStep(pico*1.08/4), topo=passo*4;
+  const Y=v=>mt+ih*(1-(v||0)/topo);
+  const path=k=>L.map((l,i)=>`${i?"L":"M"}${X(i).toFixed(1)} ${Y(l[k]).toFixed(1)}`).join(" ");
+  const ticks=[0,1,2,3,4].map(f=>passo*f);
+
+  return <div className="card" style={{marginBottom:16}}>
+    <div className="h3" style={{marginBottom:2}}>❄️ MCR · evolução mês a mês</div>
+    <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:12}}>
+      {mcrSet.size} PDVs marcados com MCR · {ult.nM} com medidor e leitura fechada em {ult.nome}
+    </div>
+
+    <div className="grid4" style={{marginBottom:14}}>
+      <Stat val={kwh(ult.kM)+" kWh"} label={`Consumo em ${ult.curto}`} color={MCR_AZUL} sub={txtVar(vConsumo)}/>
+      <Stat val={kwh(ult.medM)+" kWh"} label="Consumo médio por PDV" color={MCR_AZUL} sub={txtVar(vMedia)}/>
+      <Stat val={fmt(ult.ene)} label={`Energia paga em ${ult.curto}`} color="#ff8b00"
+        sub={ult.rep>0?`${(ult.ene/ult.rep*100).toFixed(1)}% do repasse do grupo`:null}/>
+      <Stat val={fmt(ult.rep)} label="Repasse do grupo MCR" color="#00314f" sub={`${ult.nRes} PDVs no cálculo`}/>
+    </div>
+
+    {L.length>1&&<div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+      {[["Com MCR",deltaM,MCR_AZUL],["Sem MCR",deltaS,MCR_LARANJA]].map(([lb,d,cor])=>
+        <div key={lb} style={{flex:"1 1 220px",padding:"10px 14px",borderRadius:10,background:"var(--accent-bg)",
+          borderLeft:`4px solid ${cor}`}}>
+          <div style={{fontSize:11,color:"var(--color-text-secondary)",fontWeight:600}}>{lb} · consumo médio por PDV</div>
+          <div style={{fontSize:19,fontWeight:700,color:corVar(d)}}>{d==null?"—":`${seta(d)} ${Math.abs(d).toFixed(1)}%`}</div>
+          <div style={{fontSize:10.5,color:"var(--color-text-tertiary)"}}>de {pri.curto} para {ult.curto}</div>
+        </div>)}
+    </div>}
+
+    <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:4,flexWrap:"wrap"}}>
+      <div style={{fontSize:12,fontWeight:700,color:"var(--accent)"}}>Consumo médio por PDV (kWh)</div>
+      {[["Com MCR",MCR_AZUL],["Sem MCR",MCR_LARANJA]].map(([lb,c])=>
+        <span key={lb} style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,color:"var(--color-text-secondary)"}}>
+          <span style={{width:12,height:3,background:c,borderRadius:2,display:"inline-block"}}/>{lb}</span>)}
+    </div>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"auto",display:"block"}} role="img"
+      aria-label="Consumo médio por PDV, em kWh, mês a mês, comparando o grupo com MCR e o grupo sem MCR">
+      {ticks.map((t,i)=><g key={i}>
+        <line x1={ml} x2={W-mr} y1={Y(t)} y2={Y(t)} stroke="#e8e8e8" strokeWidth="1"/>
+        <text x={ml-8} y={Y(t)+4} textAnchor="end" fontSize="10.5" fill="#8a8a8a">{kwh(t)}</text>
+      </g>)}
+      {L.map((l,i)=><text key={i} x={X(i)} y={H-12} textAnchor="middle" fontSize="10.5"
+        fill={hov===i?"#333":"#8a8a8a"} fontWeight={hov===i?700:400}>{l.curto}</text>)}
+      <path d={path("medS")} fill="none" stroke={MCR_LARANJA} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+      <path d={path("medM")} fill="none" stroke={MCR_AZUL} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+      {L.map((l,i)=><g key={i}>
+        <circle cx={X(i)} cy={Y(l.medS)} r={hov===i?6:4.5} fill={MCR_LARANJA} stroke="#fff" strokeWidth="2"/>
+        <circle cx={X(i)} cy={Y(l.medM)} r={hov===i?6:4.5} fill={MCR_AZUL} stroke="#fff" strokeWidth="2"/>
+      </g>)}
+      {hov!=null&&<line x1={X(hov)} x2={X(hov)} y1={mt} y2={mt+ih} stroke="#bbb" strokeWidth="1" strokeDasharray="3 3"/>}
+      {hov!=null&&(()=>{
+        const l=L[hov], bw=186, bh=62;
+        const bx=Math.min(Math.max(X(hov)-bw/2,ml),W-mr-bw);
+        // Caixa vai para o lado vazio do gráfico, para não tampar as linhas
+        const by=Y(Math.max(l.medM,l.medS))<mt+ih/2 ? mt+ih-bh-6 : mt+6;
+        return <g pointerEvents="none">
+          <rect x={bx} y={by} width={bw} height={bh} rx="8" fill="#fff" stroke="#ddd"/>
+          <text x={bx+10} y={by+17} fontSize="11" fontWeight="700" fill="#00314f">{l.nome}{l.fechado?" 🔒":""}</text>
+          <text x={bx+10} y={by+34} fontSize="10.5" fill="#444">
+            <tspan fill={MCR_AZUL}>■</tspan> Com MCR: {kwh(l.medM)} kWh ({l.nM} PDVs)</text>
+          <text x={bx+10} y={by+50} fontSize="10.5" fill="#444">
+            <tspan fill={MCR_LARANJA}>■</tspan> Sem MCR: {kwh(l.medS)} kWh ({l.nS} PDVs)</text>
+        </g>;
+      })()}
+      {L.map((l,i)=><rect key={i} x={X(i)-(n<2?iw/2:iw/(n-1)/2)} y={mt} width={n<2?iw:iw/(n-1)} height={ih}
+        fill="transparent" onMouseEnter={()=>setHov(i)} onMouseLeave={()=>setHov(null)}/>)}
+    </svg>
+
+    <div className="scroll-x" style={{marginTop:14}}>
+      <table><thead><tr>
+        <th>Mês</th><th style={{textAlign:"right"}}>Consumo MCR</th><th style={{textAlign:"right"}}>Médio/PDV</th>
+        <th style={{textAlign:"right"}}>Sem MCR médio/PDV</th><th style={{textAlign:"right"}}>Energia R$</th>
+        <th style={{textAlign:"right"}}>Repasse do grupo</th>
+      </tr></thead><tbody>
+        {L.map((l,i)=>{const v=i>0?varPct(l.medM,L[i-1].medM):null;return <tr key={l.nome}>
+          <td style={{fontWeight:600}}>{l.nome} {l.fechado&&<span title="período fechado">🔒</span>}</td>
+          <td className="mono" style={{textAlign:"right"}}>{kwh(l.kM)} kWh</td>
+          <td className="mono" style={{textAlign:"right"}}>{kwh(l.medM)}
+            {v!=null&&<span style={{fontSize:10,marginLeft:6,color:corVar(v)}}>{seta(v)}{Math.abs(v).toFixed(1)}%</span>}</td>
+          <td className="mono" style={{textAlign:"right",color:"var(--color-text-secondary)"}}>{kwh(l.medS)}</td>
+          <td className="mono" style={{textAlign:"right"}}>{fmt(l.ene)}</td>
+          <td className="mono" style={{textAlign:"right",fontWeight:600}}>{fmt(l.rep)}</td>
+        </tr>;})}
+      </tbody></table>
+    </div>
+
+    {L.length>1&&(()=>{
+      // Variação por PDV entre o primeiro e o último mês com leitura dos dois lados
+      const pri_=serie[0], ult_=serie[serie.length-1];
+      const linhas=comMedidor.filter(p=>mcrSet.has(String(p.id))).map(p=>{
+        const a=pri_.dm[String(p.id)], b=ult_.dm[String(p.id)];
+        if(!a||!b)return null;
+        const ca=(Number(a.meter_end)||0)-(Number(a.meter_start)||0);
+        const cb=(Number(b.meter_end)||0)-(Number(b.meter_start)||0);
+        if(!(ca>0)||!(cb>0))return null;
+        return {id:p.id,nome:p.name,ca,cb,v:(cb-ca)/ca*100};
+      }).filter(Boolean).sort((x,y)=>x.v-y.v);
+      if(!linhas.length)return null;
+      const bloco=(tit,arr,cor)=><div style={{flex:"1 1 320px"}}>
+        <div style={{fontSize:11.5,fontWeight:700,color:cor,marginBottom:6}}>{tit}</div>
+        {arr.map(r=><div key={r.id} style={{display:"flex",justifyContent:"space-between",gap:8,
+          fontSize:11.5,padding:"4px 0",borderBottom:"1px solid #f2f2f2"}}>
+          <span className="trunc" title={r.nome}>{r.nome}</span>
+          <span className="mono" style={{whiteSpace:"nowrap",color:cor,fontWeight:600}}>
+            {r.v>0?"+":""}{r.v.toFixed(0)}% <span style={{color:"var(--color-text-tertiary)",fontWeight:400}}>({kwh(r.ca)}→{kwh(r.cb)})</span></span>
+        </div>)}
+      </div>;
+      return <div style={{marginTop:16}}>
+        <div style={{fontSize:12,fontWeight:700,color:"var(--accent)",marginBottom:8}}>
+          Variação de consumo por PDV, de {pri.curto} para {ult.curto}</div>
+        <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
+          {bloco("Maiores quedas",linhas.slice(0,5),"#1a7f37")}
+          {bloco("Maiores altas",linhas.slice(-5).reverse(),"var(--red)")}
+        </div>
+      </div>;
+    })()}
+
+    <div style={{marginTop:14,padding:"9px 12px",borderRadius:8,background:"#fff8e8",border:"1px solid #ffd28a",
+      fontSize:11,color:"#92400e",lineHeight:1.5}}>
+      <b>Como ler:</b> entram só PDVs de contrato com medidor e com leitura de início e fim no mês.
+      Meses em aberto ainda podem mudar. Comparar o <b>médio por PDV</b> dos dois grupos neutraliza calor e
+      entrada de PDV novo, mas <b>não é antes e depois</b>: sem a data de instalação de cada MCR, não dá para
+      isolar o efeito do aparelho. Com as datas, dá para medir a economia de verdade por ponto.
+    </div>
+  </div>;
+}
+
 function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,onLoadPeriodResults,revUuidMap,userRole,md}) {
   const [compPeriods,setCompPeriods]=useState([]);
   const [compData,setCompData]=useState({});
@@ -930,6 +1109,35 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   useEffect(()=>{(async()=>{
     try{const l=await SB.loadMcr();setMcrList(l||[]);}catch(e){console.error("loadMcr",e);}
   })();},[]);
+  // ─── Chave Geral ⇄ MCR. Em "mcr" o dashboard inteiro passa a olhar só os PDVs com
+  // o aparelho, e ganha o painel de evolução mês a mês (consumo kWh e repasse). ───
+  const [dashView,setDashView]=useState(()=>{try{return localStorage.getItem("dash-view")||"geral";}catch{return "geral";}});
+  const isMcrView=dashView==="mcr";
+  function trocarView(v){setDashView(v);try{localStorage.setItem("dash-view",v);}catch{}}
+  // Série histórica do painel MCR: para cada período, dados de medidor + resultados.
+  // Carrega uma vez ao entrar no modo MCR e fica em memória.
+  const [mcrSerie,setMcrSerie]=useState(null);
+  const [mcrLoading,setMcrLoading]=useState(false);
+  useEffect(()=>{
+    if(!isMcrView||mcrSerie||mcrLoading)return;
+    if(!(allPeriods||[]).length||!Object.keys(revUuidMap||{}).length)return;
+    let cancel=false;
+    (async()=>{
+      setMcrLoading(true);
+      const ordem=[...allPeriods].sort((a,b)=>(a.ano*12+a.mes)-(b.ano*12+b.mes));
+      const out=[];
+      for(const p of ordem){
+        let dm={},res=[];
+        try{dm=await SB.loadMonthlyData(p.id,revUuidMap);}catch(e){console.error("mcr/md",e);}
+        try{res=(await onLoadPeriodResults(p.id))||[];}catch(e){console.error("mcr/res",e);}
+        if(cancel)return;
+        out.push({per:p,dm,res});
+      }
+      if(!cancel){setMcrSerie(out);setMcrLoading(false);}
+    })();
+    return ()=>{cancel=true;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[isMcrView,(allPeriods||[]).length,Object.keys(revUuidMap||{}).length]);
   const [searchPdvs,setSearchPdvs]=useState([]); // array of strings (selected PDV names/terms)
   const [searchInput,setSearchInput]=useState("");
   const [searchOpen,setSearchOpen]=useState(false);
@@ -1072,6 +1280,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
 
   // Apply ALL filters (type + revenue consideration + name search + payment day)
   function passesFilters(pdvId){
+    if(isMcrView&&!mcrSet.has(String(pdvId)))return false; // chave MCR: só PDVs com o aparelho
     if(filterType&&pdvType[pdvId]!==filterType)return false;
     if(filterRevCons&&pdvRevCons[pdvId]!==filterRevCons)return false;
     if(repDay!=="todos"&&String(pdvPayDay[pdvId]||20)!==repDay)return false;
@@ -1287,7 +1496,21 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
   }
 
   return <div className="fade-in">
-    <div className="h2" style={{marginBottom:12}}>Dashboard</div>
+    <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:12,flexWrap:"wrap"}}>
+      <div className="h2" style={{margin:0}}>Dashboard</div>
+      {/* Chave Geral ⇄ MCR: troca o dashboard inteiro para os PDVs com o aparelho */}
+      <div style={{display:"inline-flex",borderRadius:999,overflow:"hidden",border:"1px solid var(--color-border-tertiary)",background:"#fff"}}>
+        {[["geral","Geral"],["mcr","❄️ MCR"]].map(([k,l],i)=>
+          <div key={k} onClick={()=>trocarView(k)} title={k==="mcr"?"Ver só os PDVs com MCR, com a evolução de consumo":"Ver todos os PDVs"}
+            style={{padding:"6px 16px",fontSize:12.5,cursor:"pointer",fontWeight:700,userSelect:"none",
+              borderLeft:i>0?"1px solid var(--color-border-tertiary)":"none",transition:"background 0.15s",
+              background:dashView===k?(k==="mcr"?"#2176B6":"var(--accent)"):"#fff",
+              color:dashView===k?"#fff":"var(--color-text-secondary)"}}>{l}</div>)}
+      </div>
+      {isMcrView&&<span style={{fontSize:11.5,color:"var(--color-text-secondary)"}}>
+        mostrando só os <b>{mcrSet.size}</b> PDVs com MCR · todo o resto da página está filtrado por eles
+      </span>}
+    </div>
     <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:8,flexWrap:"wrap"}}>
       <div style={{display:"flex",flexDirection:"column",gap:3}}>
         <label style={{fontSize:11,color:"var(--color-text-secondary)",fontWeight:600}}>Período início</label>
@@ -1347,6 +1570,7 @@ function Dashboard({pdvs,results,period,activePeriod,allPeriods,onSelectPeriod,o
           sub={tot>0?`${pctRev.toFixed(1)}%${hasFilter?" do filtrado":" do repasse"}`:null}/>
       </div>;
     })()}
+    {isMcrView&&<McrPanel serie={mcrSerie} loading={mcrLoading} pdvs={pdvs} mcrSet={mcrSet}/>}
     <div className="card" style={{position:"relative"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:cardsCollapsed.search?0:8,flexWrap:"wrap",gap:8}}>
         <div className="h3" style={{margin:0,display:"flex",alignItems:"center",gap:4}}><Chevron k="search"/>Buscar PDV {searchPdvs.length>0&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)"}}>({searchPdvs.length} selecionado(s))</span>}</div>

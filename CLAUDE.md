@@ -83,6 +83,19 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   `reviewReq` do admin aplica esse caso via `upsertEmails` — nunca via `patchPdv` (não é coluna de `pdvs`).
 - **Dados bancários abrem expandidos:** no `PdvForm` o `<details>` de "Dados bancários" tem o atributo
   **`open`** — ao abrir Novo/Editar PDV a seção já aparece preenchida, sem precisar clicar.
+- **Dashboard com chave Geral ⇄ MCR:** o `Dashboard` tem um botão no título que troca a página inteira
+  para os PDVs com MCR (aparelho que automatiza o ar-condicionado e derruba o consumo). Em modo MCR,
+  `passesFilters` exige `mcrSet.has(id)`, então cards, Top 10, comparação e tabela já saem filtrados, e
+  aparece o `McrPanel`. Estado em `localStorage` `dash-view`.
+- **`McrPanel` (evolução mês a mês):** carrega, uma vez ao entrar no modo, `SB.loadMonthlyData` +
+  `onLoadPeriodResults` de **todos** os períodos (estado `mcrSerie`). Só entram PDVs de contrato com
+  **Medidor** e com `meter_end > meter_start` no mês. Mostra KPIs do último mês, variação do consumo
+  **médio por PDV** de cada grupo (com e sem MCR) desde o primeiro mês, gráfico de linhas em SVG puro
+  (sem biblioteca) com hover, tabela mês a mês e ranking de maiores quedas/altas por PDV.
+  **Comparar o médio por PDV dos dois grupos é proposital:** neutraliza calor e entrada de PDV novo.
+  Não é antes/depois — **a tabela `mcr` não guarda data de instalação**, então o efeito do aparelho não
+  é isolável hoje. Cores do gráfico `#2176B6` (com MCR) e `#E07400` (sem MCR), validadas para daltonismo
+  e contraste; não trocar pelo azul #00314f da marca, que reprova nos dois testes como cor de gráfico.
 - **Papéis** (`user_roles.role`): `master`, `admin`, `usuario`, `view`, `pendente`.
   Cada página do menu tem sua lista de papéis permitidos.
 
