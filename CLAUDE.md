@@ -83,6 +83,13 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   `reviewReq` do admin aplica esse caso via `upsertEmails` — nunca via `patchPdv` (não é coluna de `pdvs`).
 - **Dados bancários abrem expandidos:** no `PdvForm` o `<details>` de "Dados bancários" tem o atributo
   **`open`** — ao abrir Novo/Editar PDV a seção já aparece preenchida, sem precisar clicar.
+- **Exportar cadastro (`exportarCadastro` no `PdvManager`):** botão "⬇ Exportar cadastro" ao lado de
+  "+ Novo PDV", **só para master/admin** (`podeExportar`) porque a planilha leva dados bancários.
+  Gera xlsx com 16 colunas (ID, PDV, tipo, receita, %, kWh, mínimo, dia pgto, os 7 campos bancários e
+  e-mail), ordenado por nome, com filtro e primeira linha congelada; o e-mail vem do mapa `emails` que
+  o `PdvManager` já carrega. Registra `audit_log` ("Exportou cadastro de PDVs"). **Existe de propósito
+  dentro do sistema:** exportação de dado bancário é feita pela pessoa logada, com papel conferido e
+  registro, em vez de arquivo solto gerado fora.
 - **Dashboard com chave Geral ⇄ MCR:** o `Dashboard` tem um botão no título que troca a página inteira
   para os PDVs com MCR (aparelho que automatiza o ar-condicionado e derruba o consumo). Em modo MCR,
   `passesFilters` exige `mcrSet.has(id)`, então cards, Top 10, comparação e tabela já saem filtrados, e

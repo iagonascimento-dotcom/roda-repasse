@@ -2006,6 +2006,34 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     catch(e){console.error("Delete error:",e);alert("Erro ao salvar: "+e.message);}
   }
 
+  // ─── Exportação completa do cadastro (master/admin). Sai TUDO: contrato, bancário e e-mail.
+  // Só master/admin porque o arquivo leva dados bancários; usuario/view não exportam. ───
+  const podeExportar=userRole?.role==="master"||userRole?.role==="admin";
+  function exportarCadastro(){
+    const cols=[
+      ["ID",p=>p.id||""],["PDV",p=>p.name||""],
+      ["Tipo de repasse",p=>p.contract_type||""],["Receita",p=>p.revenue_consideration||""],
+      ["% negociado",p=>toPct(p.negotiated_percentage)||0],["Preço kWh",p=>p.kwh_unity_price||0],
+      ["Mínimo",p=>p.minimal_repass||0],["Dia pgto",p=>p.payment_day||20],
+      ["CNPJ condomínio",p=>p.bank_cnpj_cond||""],["CNPJ da conta",p=>p.bank_cnpj||""],
+      ["Nome da conta",p=>p.bank_name||""],["Banco",p=>p.bank_banco||""],
+      ["Agência",p=>p.bank_agencia||""],["Conta",p=>p.bank_conta||""],["PIX",p=>p.bank_pix||""],
+      ["E-mail",p=>emails[String(p.id||"")]||""]];
+    const lista=[...pdvs].sort((a,b)=>(a.name||"").localeCompare(b.name||"","pt-BR"));
+    const aoa=[cols.map(c=>c[0]),...lista.map(p=>cols.map(c=>c[1](p)))];
+    const ws=XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"]=[{wch:10},{wch:40},{wch:34},{wch:10},{wch:12},{wch:10},{wch:11},{wch:9},
+      {wch:20},{wch:20},{wch:34},{wch:16},{wch:10},{wch:14},{wch:24},{wch:34}];
+    ws["!freeze"]={xSplit:0,ySplit:1};
+    ws["!autofilter"]={ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:lista.length,c:cols.length-1}})};
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,"Cadastro de PDVs");
+    const hoje=new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb,`cadastro_pdvs_${hoje}.xlsx`);
+    audit("Exportou cadastro de PDVs",{entidade:"PDV",
+      descricao:`${lista.length} PDVs exportados em planilha (contrato, dados bancarios e e-mail)`});
+  }
+
   // Decide which pdv data to pass to the form
   const formPdv=editing!==null?pdvs[editing]:(formInitData||empty);
 
@@ -2013,9 +2041,13 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     {justify&&<JustifyModal changeCount={justify.changeCount} detail={justify.detail} onConfirm={justify.onConfirm} onCancel={()=>setJustify(null)}/>}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div className="h2">Cadastro de PDVs ({pdvs.length})</div>
-      <button className="btn btn-p" onClick={()=>{setEditing(null);setFormInitData(null);setShowForm(true);}}>
-        {isUsuario?"+ Solicitar novo PDV":"+ Novo PDV"}
-      </button>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        {podeExportar&&<button className="btn btn-o" onClick={exportarCadastro}
+          title="Planilha com contrato, dados bancários e e-mail de todos os PDVs">⬇ Exportar cadastro</button>}
+        <button className="btn btn-p" onClick={()=>{setEditing(null);setFormInitData(null);setShowForm(true);}}>
+          {isUsuario?"+ Solicitar novo PDV":"+ Novo PDV"}
+        </button>
+      </div>
     </div>
     {isUsuario&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg)",color:"#92400e",fontSize:12,marginBottom:14}}>
       💡 Como Usuário, suas ações (criar, editar, excluir) serão enviadas como solicitação para o administrador aprovar.
