@@ -120,11 +120,18 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   `pdv_uuid`). Hoje: 51 aparelhos na conta, **41 vinculados e travados**, 10 fora (os "LV ENERGY" e um
   interruptor de teste). O vínculo é **sempre pelo código**, nunca pelo nome: na Tuya existe um aparelho
   chamado "198162 - MC ATLÉTICO GOLF" que é, na verdade, o MC OCEANA GOLF.
-- **Botões na Entrada de Dados (aba Medidores):** `buscarTuya` lê os PDVs vinculados (em paralelo, de 8
-  em 8), abre o `ConfirmModal` com a conferência e só então grava no `meter_end`; marca **⛔ quando a
-  leitura é menor que o início do mês** (medidor trocado/zerado). `extrairTuya` baixa a planilha com
-  código, PDV, kWh, lido em e consumo. Na tabela de Leituras, um **⚡** ao lado do nome mostra o
-  `device_id` vinculado ao passar o mouse.
+- **Botões na Entrada de Dados (aba Medidores):** `buscarTuya` lê os PDVs vinculados **daquela tela**
+  (em paralelo, de 8 em 8), abre o `ConfirmModal` com a conferência e só então grava no `meter_end`;
+  marca **⛔ quando a leitura é menor que o início do mês** (medidor trocado/zerado). `extrairTuya` é
+  outra coisa: busca na Tuya na hora, em **todos** os medidores vinculados, e baixa uma planilha com
+  **só 3 colunas — ID, PDV e kWh** — sem nada da tela nem do período (foi pedido assim). Na tabela de
+  Leituras, um **⚡** ao lado do nome mostra o `device_id` vinculado ao passar o mouse.
+- **Página "Medidores Tuya"** (`MedidoresTuya`, chave `medidores`, ícone `zap`, master/admin): lista os
+  51 aparelhos, vincula cada um a um PDV **por lista suspensa, nunca digitando o `device_id`** (20
+  caracteres opacos: um erro de 1 caractere lançaria leitura no PDV errado, calado), filtra por
+  vinculados/sem vínculo, testa a leitura na hora (⚡ Testar) e tem a **trava** (🔒) que só o master
+  altera. O botão "⟳ Atualizar lista da Tuya" relista e grava aparelhos novos **sem tocar nos vínculos
+  existentes**. Um PDV já usado some do dropdown dos outros (índice único em `pdv_uuid`).
 - **Papéis** (`user_roles.role`): `master`, `admin`, `usuario`, `view`, `pendente`.
   Cada página do menu tem sua lista de papéis permitidos.
 

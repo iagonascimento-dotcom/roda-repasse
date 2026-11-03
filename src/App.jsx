@@ -21,6 +21,7 @@ const PAGE_REGISTRY = [
   ["historico","history","Histórico de Período",["master","admin","usuario","view"]],
   ["pdvs","store","Cadastro PDVs",["master","admin","usuario"]],
   ["conferencia","clipboard-check","Conferência PDVs",["master","admin"]],
+  ["medidores","zap","Medidores Tuya",["master","admin"]],
   ["entrada","keyboard","Entrada dados",["master","admin"]],
   ["demo","receipt","Demonstrativo",["master","admin","usuario"]],
   ["fin","wallet","Financeiro",["master","admin"]],
@@ -477,6 +478,28 @@ const SB = {
      ficam nos secrets do Supabase e nunca chegam aqui no frontend. */
   async loadTuyaDevices(){
     return this.api("/rest/v1/tuya_devices?select=*&pdv_uuid=not.is.null&order=vmpay_id");
+  },
+  // Tela de vinculo: traz TODOS os aparelhos, inclusive os sem PDV.
+  async loadTuyaDevicesAll(){
+    return this.api("/rest/v1/tuya_devices?select=*&order=nome_tuya");
+  },
+  async patchTuyaDevice(id,patch){
+    await this.api(`/rest/v1/tuya_devices?id=eq.${id}`,{method:"PATCH",
+      body:JSON.stringify({...patch,updated_at:new Date().toISOString()}),
+      headers:{"Prefer":"return=minimal"}});
+  },
+  // Relista na Tuya e grava os aparelhos novos, sem tocar nos vinculos existentes.
+  async syncTuyaDevices(){
+    const r=await fetch(`${SB_URL}/functions/v1/tuya-kwh`,{method:"POST",
+      headers:this.headers(),body:JSON.stringify({action:"list"})});
+    if(!r.ok) throw new Error(await r.text());
+    const j=await r.json();
+    if(!j.ok||!j.devices?.length) throw new Error(j.erro||"A Tuya não devolveu dispositivos.");
+    const body=j.devices.map(d=>({device_id:d.device_id,nome_tuya:d.nome_tuya||"",online:!!d.online}));
+    await this.api("/rest/v1/tuya_devices?on_conflict=device_id",{method:"POST",
+      body:JSON.stringify(body),
+      headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
+    return j.devices.length;
   },
   async fetchTuyaKwh(device_id,energy_code,energy_scale){
     const r=await fetch(`${SB_URL}/functions/v1/tuya-kwh`,{method:"POST",
@@ -2266,6 +2289,149 @@ function PdvForm({pdv,email="",onSave,onCancel,isUsuario,syncLocais=[],codigosCa
   </div>;
 }
 
+/* ─── Medidores Tuya: tela de vínculo PDV x aparelho ───
+   Vincular por LISTA e não por digitação é proposital: o device_id tem 20 caracteres
+   sem sentido e um erro de 1 caractere lança leitura no PDV errado, calado. A trava
+   (locked) impede edição acidental depois de conferido; só o master destrava. */
+function MedidoresTuya({pdvs,userRole}){
+  const [lista,setLista]=useState([]);
+  const [carregando,setCarregando]=useState(true);
+  const [busy,setBusy]=useState("");
+  const [msg,setMsg]=useState("");
+  const [filtro,setFiltro]=useState("todos");   // todos | vinculados | livres
+  const [busca,setBusca]=useState("");
+  const [leituras,setLeituras]=useState({});    // device_id -> texto da leitura
+  const isMaster=userRole?.role==="master";
+
+  async function recarregar(){
+    setCarregando(true);
+    try{setLista(await SB.loadTuyaDevicesAll()||[]);}
+    catch(e){setMsg("Erro ao carregar: "+e.message);}
+    setCarregando(false);
+  }
+  useEffect(()=>{recarregar();},[]);
+
+  const porCodigo={};pdvs.forEach(p=>{porCodigo[String(p.id)]=p;});
+  const usados=new Set(lista.filter(d=>d.vmpay_id).map(d=>String(d.vmpay_id)));
+
+  async function vincular(d,codigo){
+    const p=codigo?porCodigo[codigo]:null;
+    if(codigo&&!p){setMsg("Código não encontrado no cadastro.");return;}
+    setBusy(d.id);setMsg("");
+    try{
+      await SB.patchTuyaDevice(d.id,{pdv_uuid:p?p.uuid:null,vmpay_id:p?p.id:null,
+        updated_by:userRole?.email||""});
+      audit(codigo?"Vinculou medidor Tuya":"Desvinculou medidor Tuya",
+        {entidade:"Medidor",entidade_nome:d.nome_tuya||d.device_id,campo:"PDV",
+         valor_antigo:d.vmpay_id||"",valor_novo:codigo||"",
+         descricao:`device_id ${d.device_id}`});
+      await recarregar();
+    }catch(e){setMsg("Erro ao vincular: "+e.message);}
+    setBusy("");
+  }
+  async function trava(d){
+    setBusy(d.id);
+    try{await SB.patchTuyaDevice(d.id,{locked:!d.locked,updated_by:userRole?.email||""});await recarregar();}
+    catch(e){setMsg("Erro: "+e.message);}
+    setBusy("");
+  }
+  async function atualizarDaTuya(){
+    setBusy("sync");setMsg("");
+    try{const n=await SB.syncTuyaDevices();await recarregar();
+      setMsg(`✓ ${n} aparelho(s) lidos da Tuya. Vínculos existentes foram mantidos.`);}
+    catch(e){setMsg("Erro ao falar com a Tuya: "+e.message);}
+    setBusy("");
+  }
+  async function testar(d){
+    setBusy(d.id);setLeituras(l=>({...l,[d.device_id]:"lendo…"}));
+    try{
+      const r=await SB.fetchTuyaKwh(d.device_id,d.energy_code,Number(d.energy_scale)||100);
+      setLeituras(l=>({...l,[d.device_id]:r.ok&&r.kwh!=null
+        ?`${Math.round(r.kwh)} kWh`:`sem leitura (${r.erro||r.msg||"?"})`}));
+    }catch(e){setLeituras(l=>({...l,[d.device_id]:"erro: "+String(e).slice(0,40)}));}
+    setBusy("");
+  }
+
+  const filtrada=lista.filter(d=>{
+    if(filtro==="vinculados"&&!d.vmpay_id)return false;
+    if(filtro==="livres"&&d.vmpay_id)return false;
+    const q=busca.trim().toLowerCase();
+    if(!q)return true;
+    const pdv=d.vmpay_id?(porCodigo[String(d.vmpay_id)]?.name||""):"";
+    return (d.nome_tuya||"").toLowerCase().includes(q)||String(d.device_id).includes(q)
+      ||String(d.vmpay_id||"").includes(q)||pdv.toLowerCase().includes(q);
+  });
+  const nVinc=lista.filter(d=>d.vmpay_id).length;
+
+  return <div className="fade-in">
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+      <div className="h2" style={{margin:0}}>Medidores Tuya ({lista.length})</div>
+      <button className="btn btn-o" disabled={busy==="sync"} onClick={atualizarDaTuya}>
+        {busy==="sync"?"Lendo a Tuya…":"⟳ Atualizar lista da Tuya"}</button>
+    </div>
+    <div className="card" style={{background:"var(--accent-bg)",border:"none",marginBottom:12}}>
+      <p style={{fontSize:12,color:"var(--color-text-secondary)",margin:0,lineHeight:1.6}}>
+        Cada aparelho é amarrado a um PDV pelo <b>código do local</b>, escolhido na lista. Nunca pelo nome:
+        na Tuya existe um medidor chamado "198162 - MC ATLÉTICO GOLF" que é, na verdade, o MC OCEANA GOLF.
+        Depois de conferir, use a <b>trava</b> para ninguém mexer sem querer. Vinculados: <b>{nVinc}</b> de <b>{lista.length}</b>.
+      </p>
+    </div>
+    <div style={{display:"flex",gap:10,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+      <div style={{display:"inline-flex",borderRadius:8,overflow:"hidden",border:"1px solid var(--color-border-tertiary)"}}>
+        {[["todos","Todos"],["vinculados","Vinculados"],["livres","Sem vínculo"]].map(([k,l],i)=>
+          <div key={k} onClick={()=>setFiltro(k)} style={{padding:"7px 14px",fontSize:12,cursor:"pointer",fontWeight:600,
+            borderLeft:i>0?"1px solid var(--color-border-tertiary)":"none",
+            background:filtro===k?"var(--accent)":"#fff",color:filtro===k?"#fff":"var(--color-text-secondary)"}}>{l}</div>)}
+      </div>
+      <input placeholder="Buscar por nome, código ou ID do aparelho…" value={busca}
+        onChange={e=>setBusca(e.target.value)} style={{flex:"1 1 260px",maxWidth:420}}/>
+      {msg&&<span style={{fontSize:12,fontWeight:600,color:msg.startsWith("✓")?"#1a7f37":"var(--red)"}}>{msg}</span>}
+    </div>
+    {carregando?<div className="card empty">Carregando…</div>:
+    <div className="card" style={{padding:0,overflow:"hidden"}}><div className="scroll-x">
+      <table><thead><tr>
+        <th>Nome na Tuya</th><th>ID do aparelho</th><th style={{textAlign:"center"}}>Online</th>
+        <th>PDV vinculado</th><th style={{textAlign:"center"}}>Trava</th><th>Leitura</th>
+      </tr></thead><tbody>
+        {filtrada.map(d=>{
+          const pdv=d.vmpay_id?porCodigo[String(d.vmpay_id)]:null;
+          const travado=d.locked&&!isMaster;
+          return <tr key={d.id} style={!d.vmpay_id?{background:"#fffaf0"}:undefined}>
+            <td className="trunc" style={{fontWeight:500}}>{d.nome_tuya||<i style={{color:"var(--color-text-tertiary)"}}>sem nome</i>}</td>
+            <td className="mono" style={{fontSize:10.5,color:"var(--color-text-secondary)"}}>{d.device_id}</td>
+            <td style={{textAlign:"center"}}>{d.online===false
+              ?<span className="badge badge-danger" title="offline">✕</span>
+              :<span className="badge badge-ok">●</span>}</td>
+            <td>
+              <select value={d.vmpay_id||""} disabled={travado||busy===d.id}
+                onChange={e=>vincular(d,e.target.value)}
+                title={travado?"Travado. Só o master destrava.":"Escolha o PDV"}
+                style={{minWidth:260,fontSize:12,...(travado?{background:"#f3f3f3",cursor:"not-allowed"}:{})}}>
+                <option value="">— sem vínculo —</option>
+                {pdvs.filter(p=>!usados.has(String(p.id))||String(p.id)===String(d.vmpay_id))
+                  .sort((a,b)=>(a.name||"").localeCompare(b.name||"","pt-BR"))
+                  .map(p=><option key={p.id} value={p.id}>{p.id} · {p.name}</option>)}
+              </select>
+            </td>
+            <td style={{textAlign:"center"}}>
+              <span onClick={()=>{if(isMaster)trava(d);}} title={isMaster?"Clique para travar/destravar":"Só o master altera a trava"}
+                style={{fontSize:15,cursor:isMaster?"pointer":"not-allowed",opacity:isMaster?1:0.5}}>
+                {d.locked?"🔒":"🔓"}</span>
+            </td>
+            <td style={{whiteSpace:"nowrap"}}>
+              <button className="btn btn-s" style={{fontSize:10,padding:"3px 8px"}}
+                disabled={busy===d.id} onClick={()=>testar(d)}>⚡ Testar</button>
+              {leituras[d.device_id]&&<span className="mono" style={{marginLeft:8,fontSize:11,
+                color:String(leituras[d.device_id]).includes("kWh")?"#1a7f37":"var(--red)"}}>
+                {leituras[d.device_id]}</span>}
+            </td>
+          </tr>;})}
+      </tbody></table>
+    </div></div>}
+    {!carregando&&filtrada.length===0&&<div className="card empty">Nenhum aparelho com esse filtro.</div>}
+  </div>;
+}
+
 /* ─── Data Entry ─── */
 function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
   const [tab,setTab]=useState("meters");
@@ -2280,7 +2446,6 @@ function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
   const [tuya,setTuya]=useState({});        // vmpay_id -> {device_id, energy_code, energy_scale, nome_tuya}
   const [tuyaBusy,setTuyaBusy]=useState("");
   const [tuyaMsg,setTuyaMsg]=useState("");
-  const [tuyaLeituras,setTuyaLeituras]=useState([]); // última busca, usada no botão de extrair
   useEffect(()=>{(async()=>{
     try{const l=await SB.loadTuyaDevices();const m={};(l||[]).forEach(d=>{m[String(d.vmpay_id)]=d;});setTuya(m);}
     catch(e){console.error("loadTuyaDevices",e);}
@@ -2469,7 +2634,6 @@ function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
     }
     setTuyaBusy("");
     const ok=out.filter(r=>r.kwh!=null), falhou=out.filter(r=>r.erro);
-    setTuyaLeituras(ok.map(r=>({id:r.p.id,nome:r.p.name,kwh:r.kwh,lido_em:r.lido_em})));
     if(!ok.length){setTuyaMsg(`Nenhuma leitura voltou. ${falhou.length} com erro.`);return;}
     // Avisa quando a leitura é MENOR que o início: medidor trocado/zerado.
     const partes=[`${ok.length} leitura(s) prontas para lançar no medidor FIM.`];
@@ -2491,23 +2655,38 @@ function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
     }});
   }
 
-  // Planilha com o que veio da Tuya: código, PDV e kWh.
-  function extrairTuya(){
-    const base=tuyaLeituras.length?tuyaLeituras
-      :mPdvs.filter(p=>tuya[String(p.id)]).map(p=>({id:p.id,nome:p.name,kwh:"",lido_em:""}));
-    if(!base.length){setTuyaMsg("Nada para extrair.");return;}
-    const aoa=[["ID","PDV","kWh (acumulado)","Lido em","Medidor início","Consumo do mês"]];
-    base.forEach(r=>{
-      const d=localMd[r.id]||{};const ini=Number(d.meter_start)||0;
-      aoa.push([r.id,r.nome,r.kwh===""?"":Number(r.kwh),
-        r.lido_em?new Date(r.lido_em).toLocaleString("pt-BR"):"",
-        ini||"", (r.kwh!==""&&ini)?Number(r.kwh)-ini:""]);
-    });
+  // Planilha crua da Tuya: codigo, PDV e kWh. Vai buscar na hora, em TODOS os
+  // medidores vinculados, sem depender do que esta na tela nem do periodo.
+  async function extrairTuya(){
+    const alvos=Object.values(tuya).filter(d=>d.vmpay_id);
+    if(!alvos.length){setTuyaMsg("Nenhum medidor vinculado.");return;}
+    const nome={};pdvs.forEach(p=>{nome[String(p.id)]=p.name;});
+    setTuyaBusy("extraindo");setTuyaMsg("");
+    const linhas=[];
+    for(let i=0;i<alvos.length;i+=8){
+      const lote=alvos.slice(i,i+8);
+      setTuyaBusy(`extraindo ${Math.min(i+8,alvos.length)}/${alvos.length}…`);
+      const res=await Promise.all(lote.map(async d=>{
+        try{
+          const r=await SB.fetchTuyaKwh(d.device_id,d.energy_code,Number(d.energy_scale)||100);
+          return {cod:d.vmpay_id,pdv:nome[String(d.vmpay_id)]||d.nome_tuya||"",
+            kwh:(r.ok&&r.kwh!=null)?Math.round(Number(r.kwh)):"",
+            obs:(r.ok&&r.kwh!=null)?"":(r.erro||r.msg||"sem leitura")};
+        }catch(e){return {cod:d.vmpay_id,pdv:nome[String(d.vmpay_id)]||"",kwh:"",obs:String(e).slice(0,60)};}
+      }));
+      linhas.push(...res);
+    }
+    setTuyaBusy("");
+    linhas.sort((a,b)=>(a.pdv||"").localeCompare(b.pdv||"","pt-BR"));
+    const aoa=[["ID","PDV","kWh"]];
+    linhas.forEach(r=>aoa.push([r.cod,r.pdv,r.kwh===""?r.obs:r.kwh]));
     const ws=XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"]=[{wch:10},{wch:40},{wch:17},{wch:19},{wch:15},{wch:15}];
+    ws["!cols"]=[{wch:10},{wch:42},{wch:14}];
     ws["!freeze"]={xSplit:0,ySplit:1};
-    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"Leituras Tuya");
-    XLSX.writeFile(wb,`leituras_tuya_${(period||"periodo").replace(/[^\w]+/g,"_")}.xlsx`);
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"Medidores Tuya");
+    XLSX.writeFile(wb,`medidores_tuya_${new Date().toISOString().slice(0,10)}.xlsx`);
+    const ok=linhas.filter(r=>r.kwh!=="").length;
+    setTuyaMsg(`✓ ${ok} de ${linhas.length} medidores com leitura.`);
   }
 
   async function preencherMedia(){
@@ -2614,7 +2793,9 @@ function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
           <button className="btn btn-p" disabled={!!tuyaBusy} onClick={buscarTuya}
             style={tuyaBusy?{opacity:0.6,cursor:"wait"}:undefined}>
             {tuyaBusy||`⚡ Buscar kWh e lançar no FIM (${mPdvs.filter(p=>tuya[String(p.id)]).length})`}</button>
-          <button className="btn btn-o" disabled={!!tuyaBusy} onClick={extrairTuya}>⬇ Extrair leituras</button>
+          <button className="btn btn-o" disabled={!!tuyaBusy} onClick={extrairTuya}
+            title="Busca na Tuya e baixa a planilha com código, PDV e kWh de todos os medidores vinculados">
+            ⬇ Extrair leituras ({Object.values(tuya).filter(d=>d.vmpay_id).length})</button>
           {tuyaMsg&&<span style={{fontSize:12,fontWeight:600,
             color:tuyaMsg.startsWith("✓")?"#1a7f37":"var(--red)"}}>{tuyaMsg}</span>}
         </div>
@@ -5147,6 +5328,7 @@ export default function App() {
           prefilled={prefilledPdv} onPrefilledHandled={()=>setPrefilledPdv(null)}
           userRole={userRole}
           onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
+        {page==="medidores"&&<MedidoresTuya pdvs={pdvs} userRole={userRole}/>}
         {page==="conferencia"&&<Conferencia pdvs={pdvs} userRole={userRole}
           onCadastrar={(data)=>{setPrefilledPdv(data);setPage("pdvs");}}/>}
         {page==="entrada"&&<DataEntry pdvs={pdvs} md={md} setMd={setMd} period={period} save={saveMdToSB} activePeriod={activePeriod} allPeriods={allPeriods}/>}
