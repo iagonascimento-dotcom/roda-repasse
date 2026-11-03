@@ -105,6 +105,26 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   Não é antes/depois — **a tabela `mcr` não guarda data de instalação**, então o efeito do aparelho não
   é isolável hoje. Cores do gráfico `#2176B6` (com MCR) e `#E07400` (sem MCR), validadas para daltonismo
   e contraste; não trocar pelo azul #00314f da marca, que reprova nos dois testes como cor de gráfico.
+- **Medidores Tuya (leitura automática do FIM):** a Edge Function **`tuya-kwh`** (código em
+  `supabase/functions/tuya-kwh/index.ts`) é a única que fala com a Tuya Cloud; as credenciais ficam
+  nos **Secrets do Supabase** (`TUYA_ACCESS_ID`, `TUYA_ACCESS_SECRET`, `TUYA_API_BASE`) e **nunca** no
+  `App.jsx`, que é público. Duas armadilhas já resolvidas, não regredir:
+  1. **Assinatura:** o SHA-256 do corpo vai em **minúsculo** dentro do `stringToSign`; só o HMAC final
+     é maiúsculo. Invertido dá `sign invalid`.
+  2. **O acumulado NÃO está em `/v1.0/devices/{id}/status` nem nas `/specifications`.** Só aparece em
+     **`/v2.0/cloud/thing/{device_id}/shadow/properties`**, campo **`total_ele`**, **multiplicado por 100**.
+     `cur_power` é potência instantânea em W e **não serve** como leitura.
+  Conferido contra o histórico: PDV 139767 `total_ele` 1445894 → 14458,94 kWh (fim out/26 = 14129).
+- **Tabela `tuya_devices`** (RLS ligado, anon bloqueado): `device_id` único, `pdv_uuid`/`vmpay_id`,
+  `energy_code` (`total_ele`), `energy_scale` (**100**), `locked`. **1 PDV = 1 medidor** (índice único em
+  `pdv_uuid`). Hoje: 51 aparelhos na conta, **41 vinculados e travados**, 10 fora (os "LV ENERGY" e um
+  interruptor de teste). O vínculo é **sempre pelo código**, nunca pelo nome: na Tuya existe um aparelho
+  chamado "198162 - MC ATLÉTICO GOLF" que é, na verdade, o MC OCEANA GOLF.
+- **Botões na Entrada de Dados (aba Medidores):** `buscarTuya` lê os PDVs vinculados (em paralelo, de 8
+  em 8), abre o `ConfirmModal` com a conferência e só então grava no `meter_end`; marca **⛔ quando a
+  leitura é menor que o início do mês** (medidor trocado/zerado). `extrairTuya` baixa a planilha com
+  código, PDV, kWh, lido em e consumo. Na tabela de Leituras, um **⚡** ao lado do nome mostra o
+  `device_id` vinculado ao passar o mouse.
 - **Papéis** (`user_roles.role`): `master`, `admin`, `usuario`, `view`, `pendente`.
   Cada página do menu tem sua lista de papéis permitidos.
 

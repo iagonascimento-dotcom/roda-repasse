@@ -471,6 +471,21 @@ const SB = {
       headers:{"Prefer":"return=minimal,resolution=merge-duplicates"}});
   },
 
+  /* ─── Medidores Tuya ───
+     O vinculo PDV x medidor mora na tabela tuya_devices (chave: vmpay_id = codigo).
+     A leitura passa SEMPRE pela Edge Function tuya-kwh: as credenciais da Tuya
+     ficam nos secrets do Supabase e nunca chegam aqui no frontend. */
+  async loadTuyaDevices(){
+    return this.api("/rest/v1/tuya_devices?select=*&pdv_uuid=not.is.null&order=vmpay_id");
+  },
+  async fetchTuyaKwh(device_id,energy_code,energy_scale){
+    const r=await fetch(`${SB_URL}/functions/v1/tuya-kwh`,{method:"POST",
+      headers:this.headers(),
+      body:JSON.stringify({action:"kwh",device_id,energy_code,energy_scale})});
+    if(!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
   /* ─── MCR (PDVs com controle remoto de ar-condicionado) ─── */
   async loadMcr(){
     return this.api("/rest/v1/mcr?select=*");
@@ -2261,6 +2276,15 @@ function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
   const [lastSave,setLastSave]=useState("");
   const [confirmImport,setConfirmImport]=useState(null); // conferência antes de aplicar import
   const [mediaInc,setMediaInc]=useState(5); // acréscimo (kWh) do botão "Preencher média"
+  // ─── Medidores Tuya: vínculo PDV x aparelho vem da tabela tuya_devices ───
+  const [tuya,setTuya]=useState({});        // vmpay_id -> {device_id, energy_code, energy_scale, nome_tuya}
+  const [tuyaBusy,setTuyaBusy]=useState("");
+  const [tuyaMsg,setTuyaMsg]=useState("");
+  const [tuyaLeituras,setTuyaLeituras]=useState([]); // última busca, usada no botão de extrair
+  useEffect(()=>{(async()=>{
+    try{const l=await SB.loadTuyaDevices();const m={};(l||[]).forEach(d=>{m[String(d.vmpay_id)]=d;});setTuya(m);}
+    catch(e){console.error("loadTuyaDevices",e);}
+  })();},[]);
   const [loadingMedia,setLoadingMedia]=useState(false);
 
   // Sync localMd when md changes externally (e.g. period switch)
@@ -2422,6 +2446,70 @@ function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
   }
   // Botão "Média": preenche o fim dos medidores faltantes com
   // fim = início do mês atual + consumo do mês anterior + N (N vem da caixa).
+  // Busca a leitura acumulada de cada PDV com medidor vinculado. Em paralelo,
+  // de 8 em 8, para não estourar o limite da Tuya. NÃO salva direto: abre a
+  // conferência, igual ao import colado.
+  async function buscarTuya(){
+    const alvos=mPdvs.filter(p=>tuya[String(p.id)]);
+    if(!alvos.length){setTuyaMsg("Nenhum PDV desta tela tem medidor vinculado.");return;}
+    setTuyaBusy("buscando");setTuyaMsg("");
+    const out=[];
+    for(let i=0;i<alvos.length;i+=8){
+      const lote=alvos.slice(i,i+8);
+      setTuyaBusy(`buscando ${Math.min(i+8,alvos.length)}/${alvos.length}…`);
+      const res=await Promise.all(lote.map(async p=>{
+        const d=tuya[String(p.id)];
+        try{
+          const r=await SB.fetchTuyaKwh(d.device_id,d.energy_code,Number(d.energy_scale)||100);
+          if(!r.ok||r.kwh==null) return {p,erro:r.erro||r.msg||"sem leitura"};
+          return {p,kwh:Math.round(Number(r.kwh)),lido_em:r.lido_em,bruto:r.valor_bruto};
+        }catch(e){return {p,erro:String(e).slice(0,80)};}
+      }));
+      out.push(...res);
+    }
+    setTuyaBusy("");
+    const ok=out.filter(r=>r.kwh!=null), falhou=out.filter(r=>r.erro);
+    setTuyaLeituras(ok.map(r=>({id:r.p.id,nome:r.p.name,kwh:r.kwh,lido_em:r.lido_em})));
+    if(!ok.length){setTuyaMsg(`Nenhuma leitura voltou. ${falhou.length} com erro.`);return;}
+    // Avisa quando a leitura é MENOR que o início: medidor trocado/zerado.
+    const partes=[`${ok.length} leitura(s) prontas para lançar no medidor FIM.`];
+    const suspeitos=ok.filter(r=>{const ini=Number((localMd[r.p.id]||{}).meter_start)||0;return ini>0&&r.kwh<ini;});
+    partes.push("\n"+ok.map(r=>{
+      const d=localMd[r.p.id]||{};const atual=Number(d.meter_end)||0;const ini=Number(d.meter_start)||0;
+      const marca=ini>0&&r.kwh<ini?"⛔ ":(atual&&atual!==r.kwh?"⚠ ":"   ");
+      return `${marca}${r.p.name} (${r.p.id}): ${atual?atual+" → ":""}${r.kwh} kWh`;
+    }).join("\n"));
+    if(suspeitos.length) partes.push(`\n⛔ ${suspeitos.length} com leitura MENOR que o início do mês (medidor trocado ou zerado). Confira antes.`);
+    if(falhou.length) partes.push(`\nSem leitura (${falhou.length}): ${falhou.map(r=>r.p.name).join(", ")}`);
+    setConfirmImport({msg:"Confira as leituras da Tuya antes de lançar.",detail:partes.join("\n"),apply:async()=>{
+      const u={...localMd};
+      ok.forEach(r=>{u[r.p.id]={...(u[r.p.id]||{}),meter_end:r.kwh};});
+      setLocalMd(u);setMd(u);setDirty(0);setConfirmImport(null);
+      try{await save(u);setLastSave(new Date().toLocaleTimeString("pt-BR"));
+        setTuyaMsg(`✓ ${ok.length} medidor(es) FIM preenchidos pela Tuya e salvos.`);}
+      catch(e){setTuyaMsg("Erro ao salvar: "+e.message);}
+    }});
+  }
+
+  // Planilha com o que veio da Tuya: código, PDV e kWh.
+  function extrairTuya(){
+    const base=tuyaLeituras.length?tuyaLeituras
+      :mPdvs.filter(p=>tuya[String(p.id)]).map(p=>({id:p.id,nome:p.name,kwh:"",lido_em:""}));
+    if(!base.length){setTuyaMsg("Nada para extrair.");return;}
+    const aoa=[["ID","PDV","kWh (acumulado)","Lido em","Medidor início","Consumo do mês"]];
+    base.forEach(r=>{
+      const d=localMd[r.id]||{};const ini=Number(d.meter_start)||0;
+      aoa.push([r.id,r.nome,r.kwh===""?"":Number(r.kwh),
+        r.lido_em?new Date(r.lido_em).toLocaleString("pt-BR"):"",
+        ini||"", (r.kwh!==""&&ini)?Number(r.kwh)-ini:""]);
+    });
+    const ws=XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"]=[{wch:10},{wch:40},{wch:17},{wch:19},{wch:15},{wch:15}];
+    ws["!freeze"]={xSplit:0,ySplit:1};
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"Leituras Tuya");
+    XLSX.writeFile(wb,`leituras_tuya_${(period||"periodo").replace(/[^\w]+/g,"_")}.xlsx`);
+  }
+
   async function preencherMedia(){
     if(!activePeriod){alert("Selecione um período primeiro.");return;}
     const k=p=>p.ano*12+p.mes;
@@ -2514,6 +2602,23 @@ function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
             {loadingMedia?"Calculando…":faltamFim>0?`Preencher média (${faltamFim} sem fim)`:"Nenhum sem fim"}</button>
         </div>
       </div>
+      <div className="card" style={{background:"#f1f8ef",border:"1px solid #c3e0b8"}}>
+        <div className="h3" style={{marginBottom:6}}>⚡ Medidores Tuya</div>
+        <p style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:8}}>
+          Puxa a leitura acumulada direto do medidor e lança no <b>FIM</b>. O vínculo PDV ↔ aparelho fica
+          na tabela <b>tuya_devices</b>, amarrado pelo <b>código do local</b>, nunca pelo nome.
+          Nesta tela, <b>{mPdvs.filter(p=>tuya[String(p.id)]).length} de {mPdvs.length}</b> PDVs têm medidor vinculado.
+          Confira a lista antes de salvar.
+        </p>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <button className="btn btn-p" disabled={!!tuyaBusy} onClick={buscarTuya}
+            style={tuyaBusy?{opacity:0.6,cursor:"wait"}:undefined}>
+            {tuyaBusy||`⚡ Buscar kWh e lançar no FIM (${mPdvs.filter(p=>tuya[String(p.id)]).length})`}</button>
+          <button className="btn btn-o" disabled={!!tuyaBusy} onClick={extrairTuya}>⬇ Extrair leituras</button>
+          {tuyaMsg&&<span style={{fontSize:12,fontWeight:600,
+            color:tuyaMsg.startsWith("✓")?"#1a7f37":"var(--red)"}}>{tuyaMsg}</span>}
+        </div>
+      </div>
       <div className="card"><div className="h3">Leituras</div>
       <div className="scroll-x"><table><thead><tr>
         <th>PDV</th><th>Início</th><th>Fim</th><th>kWh</th><th>Consumo</th><th>Energia</th>
@@ -2521,7 +2626,9 @@ function DataEntry({pdvs,md,setMd,period,save,activePeriod,allPeriods=[]}) {
         {mPdvs.map(p=>{const d=localMd[p.id]||{};const s=d.meter_start||0;const e=d.meter_end||0;
           const c=e-s;const b=c*(p.kwh_unity_price||0);
           return <tr key={p.id}>
-            <td className="trunc"><span className="mono" style={{fontSize:10,color:"var(--accent)",marginRight:6}}>{p.id}</span>{p.name}</td>
+            <td className="trunc"><span className="mono" style={{fontSize:10,color:"var(--accent)",marginRight:6}}>{p.id}</span>{p.name}
+              {tuya[String(p.id)]&&<span title={`Medidor Tuya vinculado: ${tuya[String(p.id)].device_id} (${tuya[String(p.id)].nome_tuya||"sem nome"})`}
+                style={{marginLeft:6,fontSize:11,cursor:"help"}}>⚡</span>}</td>
             <td><input type="number" style={{width:90}} value={s||""} onChange={ev=>upd(p.id,"meter_start",ev.target.value)}/></td>
             <td><input type="number" style={{width:90}} value={e||""} onChange={ev=>upd(p.id,"meter_end",ev.target.value)}/></td>
             <td className="mono" style={{color:"var(--color-text-secondary)"}}>{p.kwh_unity_price||"-"}</td>
