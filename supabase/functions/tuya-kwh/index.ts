@@ -23,6 +23,11 @@
 //    raw   -> GET de leitura livre na Tuya    { path }  (investigacao)
 //
 //  Secrets: TUYA_ACCESS_ID / TUYA_ACCESS_SECRET / TUYA_API_BASE
+//
+//  QUEM PODE CHAMAR (17/11/2026): so master e admin. O gateway ja exige um
+//  JWT valido (verify_jwt), mas isso deixava passar qualquer conta logada,
+//  inclusive "pendente". Agora a funcao le o papel do chamador em user_roles
+//  usando o proprio token dele (o RLS so devolve a linha da propria pessoa).
 // ============================================================
 
 const ACCESS_ID = (Deno.env.get("TUYA_ACCESS_ID") ?? "").trim();
@@ -33,6 +38,34 @@ const API_BASE = (Deno.env.get("TUYA_API_BASE") ?? "https://openapi.tuyaus.com")
 // Escala padrao destes medidores. Fica aqui tambem (e nao so no banco) para o
 // caso de alguem chamar a funcao sem passar energy_scale.
 const ESCALA_PADRAO = 100;
+
+const SUPABASE_URL = (Deno.env.get("SUPABASE_URL") ?? "").replace(/\/$/, "");
+const PAPEIS_OK = ["master", "admin"];
+
+// "sub" (id do usuario) de dentro do JWT. Nao valida assinatura aqui: quem valida
+// e o PostgREST na consulta abaixo, que recusa token forjado.
+function subDoToken(token: string): string {
+  try {
+    const parte = token.split(".")[1] ?? "";
+    const b64 = parte.replace(/-/g, "+").replace(/_/g, "/")
+      .padEnd(Math.ceil(parte.length / 4) * 4, "=");
+    return String(JSON.parse(atob(b64)).sub ?? "");
+  } catch { return ""; }
+}
+
+async function papelDoChamador(req: Request): Promise<string | null> {
+  const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+  const sub = token ? subDoToken(token) : "";
+  if (!sub || !SUPABASE_URL) return null; // anon key nao tem "sub"
+  const apikey = Deno.env.get("SUPABASE_ANON_KEY") ?? req.headers.get("apikey") ?? "";
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/user_roles?select=role&user_id=eq.${encodeURIComponent(sub)}&limit=1`,
+    { headers: { apikey, Authorization: `Bearer ${token}` } },
+  );
+  if (!r.ok) return null;
+  const rows = await r.json().catch(() => []);
+  return Array.isArray(rows) && rows[0]?.role ? String(rows[0].role) : null;
+}
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -145,6 +178,10 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   const J = (o: unknown, s = 200) => Response.json(o, { status: s, headers: CORS });
   try {
+    const papel = await papelDoChamador(req);
+    if (!papel || !PAPEIS_OK.includes(papel)) {
+      return J({ ok: false, erro: "Sem permissao: so master e admin leem os medidores Tuya.", papel: papel ?? "sem cadastro" }, 403);
+    }
     if (!ACCESS_ID || !ACCESS_SECRET) {
       return J({ ok: false, erro: "Faltam os secrets TUYA_ACCESS_ID e/ou TUYA_ACCESS_SECRET." }, 500);
     }

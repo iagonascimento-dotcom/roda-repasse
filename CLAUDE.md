@@ -34,7 +34,10 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   repasse), `pdv_emails`, `mcr`, `menu_config`. Há também a view `sync.locais` (base
   sincronizada, fonte de verdade dos locais — acesso via header `Accept-Profile: sync`;
   campos usados: `codigo` = ID VMpay, `local` = nome, + endereço/cidade/estado).
-- **Realtime** via WebSocket nativo (`SB.subscribeRealtime`), sem dependência extra.
+- **Realtime** via WebSocket nativo (`SB.subscribeRealtime`), sem dependência extra. **Atenção:** o
+  cliente entra no canal só com a anon key (não manda `access_token`), e o anon não lê nenhuma tabela de
+  dados, então hoje o Realtime **não entrega eventos**. Para voltar a funcionar, o `phx_join` precisa
+  levar `access_token: SB.token` (e reenviar no refresh). Não foi mexido de propósito em 17/11/2026.
 - A **Conferência de PDVs** (`Conferencia`) NÃO importa mais planilha — carrega `sync.locais`
   automaticamente e mostra os locais cujo `codigo` não tem PDV cadastrado (`pdvs.vmpay_id`) nem
   está em `pdvs_ignorados` (os "de fora"/pendentes). O cadastro (`PdvForm`) já usa a mesma base.
@@ -46,6 +49,30 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
   `pdvs.nome` com `sync.locais.local` pelo mesmo `codigo` e, se mudou, atualiza o nome (global) e
   registra no histórico ("Nome sincronizado da base"). O código nunca muda. **Não afeta períodos
   entregues** — o nome não entra em cálculo e os valores são snapshot no `resultados`.
+
+## Segurança do banco (RLS por papel, desde 17/11/2026)
+O papel (`user_roles.role`) é conferido **dentro do banco**, não só na tela. Registro completo em
+`supabase/migrations/20261117_seguranca_regras_por_papel.sql`.
+- **Função `interno.papel()`** (security definer, schema `interno`, que **não** é exposto na API) devolve o
+  papel de quem está logado. Toda política usa `(select interno.papel()) in (...)`.
+- **Quem pode o quê:** `master` tudo · `admin` tudo menos `user_roles`, `menu_config` e apagar período ·
+  `usuario` lê e só grava `change_requests` (as próprias) e `audit_log` · `view` só lê · `pendente` ou
+  conta sem linha em `user_roles` não lê nada além da própria linha · **anônimo só lê `menu_config`**
+  (o app carrega o menu ao abrir a página, antes de restaurar a sessão; não fechar isso de novo).
+- `audit_log` é só-inserção (ninguém altera nem apaga pela API). `user_roles`: ninguém se promove;
+  quem não é master só consegue criar a própria linha como `pendente`.
+- **`sync.locais`** agora é `security_invoker` e `sync.all_locais` tem política de leitura por papel;
+  anônimo não acessa o schema `sync`. A função `sync-locais-do-roda` grava com service role (não é afetada).
+- **Edge Function `tuya-kwh` só atende master/admin:** lê o papel do chamador em `user_roles` com o próprio
+  token dele e devolve 403 para os demais.
+- **TABELA NOVA NASCE FECHADA.** Os default privileges do schema `public` foram revogados para
+  `anon`/`authenticated`. Ao criar tabela: `grant select, insert, update, delete ... to authenticated`,
+  `alter table ... enable row level security` e políticas no padrão acima. Sem isso o app recebe
+  "permission denied" (é proposital: erro visível em vez de tabela aberta). **Nunca criar tabela de
+  backup/rascunho no `public`:** use o schema `interno` (foi uma tabela de backup sem RLS que gerou o
+  alerta crítico do Supabase em 14/11/2026).
+- Escrita de papel não autorizado falha calada em alguns fluxos (ex.: `recalcAndSaveResults` disparado
+  por `usuario`/`view` em `handleSelectPeriod` cai no `catch` e só loga no console). É esperado.
 
 ## Domínio / regras de negócio
 - **Motor de cálculo:** função `calc()` no `App.jsx`. São **11 tipos de contrato**
@@ -115,7 +142,7 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
      **`/v2.0/cloud/thing/{device_id}/shadow/properties`**, campo **`total_ele`**, **multiplicado por 100**.
      `cur_power` é potência instantânea em W e **não serve** como leitura.
   Conferido contra o histórico: PDV 139767 `total_ele` 1445894 → 14458,94 kWh (fim out/26 = 14129).
-- **Tabela `tuya_devices`** (RLS ligado, anon bloqueado): `device_id` único, `pdv_uuid`/`vmpay_id`,
+- **Tabela `tuya_devices`** (RLS ligado, só master/admin leem e gravam): `device_id` único, `pdv_uuid`/`vmpay_id`,
   `energy_code` (`total_ele`), `energy_scale` (**100**), `locked`. **1 PDV = 1 medidor** (índice único em
   `pdv_uuid`). Hoje: 51 aparelhos na conta, **41 vinculados e travados**, 10 fora (os "LV ENERGY" e um
   interruptor de teste). O vínculo é **sempre pelo código**, nunca pelo nome: na Tuya existe um aparelho
