@@ -10,7 +10,7 @@ quanto cada ponto de venda recebe por período conforme o tipo de contrato, gera
 demonstrativos, dados financeiros/bancários e planilhas de disparo de e-mail.
 
 ## Stack
-- **React 18 + Vite** (sem TypeScript). Praticamente tudo vive em um único arquivo: `src/App.jsx` (~5650 linhas).
+- **React 18 + Vite** (sem TypeScript). Praticamente tudo vive em um único arquivo: `src/App.jsx` (~5700 linhas).
 - **Supabase** (PostgreSQL + Auth + Realtime), acessado por um adapter REST próprio (objeto `SB` no topo do `App.jsx`) — **não** usa o SDK `@supabase/supabase-js`.
 - **GitHub Pages** para hospedagem. Sem backend próprio.
 - Única dependência de runtime além do React: `xlsx` (geração/leitura de planilhas).
@@ -80,6 +80,24 @@ O papel (`user_roles.role`) é conferido **dentro do banco**, não só na tela. 
   variantes "OU" (pegam o maior valor), "Conta de Energia + Percentual", e Boleto (sem cálculo).
 - **Faturamento** pode ser **Bruto** (fator 1.0) ou **Líquido** (`LIQ = 0.87`).
 - Medidor: `(medidorFim − medidorInício) × kwh_unity_price`. Há ajuste manual com justificativa.
+- **Faixa de faturamento (variável opcional por PDV, desde 23/11/2026):** para contrato que muda quando
+  o faturamento passa de um valor. Colunas em `pdvs`: `tier_mode`, `tier_threshold` (R$) e `tier_pct`
+  (fração). Modos (`TIER_MODES`), todos só agem quando o faturamento **considerado** (`cr`, bruto ou
+  líquido conforme o campo Receita) passa do limite:
+  - `extra_excess` — **% extra só sobre o que passar**, somado ao repasse; vale para qualquer tipo de
+    contrato. Caso real: MC PORTO CARIOCA (210845), "Medidor + Mínimo" com R$ 8.000 fixo + 8% do que
+    passar de R$ 80 mil.
+  - `replace_all` — o % do contrato **troca** e vale sobre o faturamento todo (ex.: 7% vira 8%).
+  - `replace_excess` — % do contrato até o limite; o % novo só sobre o que passar.
+  A conta fica em **`faixaVar(pdv,cr,pct)`** (logo antes do `calc()`), usada pelo `calc()` **e** pelo
+  cálculo ao vivo do Demonstrativo (que duplica o switch dos tipos; ao mexer em um, mexer no outro).
+  Nos modos `replace` o `pctRevenue` já sai com o % efetivo; no `extra_excess` o valor extra entra no
+  `subtotal` e volta em `tierExtra`. O `details` ganha o trecho "| Faixa: …" e o Demonstrativo mostra
+  o selo **faixa** no Subtotal (passe o mouse para ver a conta). No `PdvForm` é o bloco "Faixa de
+  faturamento": escolher regra sem limite/percentual bloqueia o salvar, e os modos `replace` em
+  contrato sem percentual mostram aviso (não fazem efeito). Sem faixa cadastrada o cálculo é idêntico
+  ao anterior (conferido em 4.400 casos). **Não há trava de base:** se o contrato diz "bruto", o campo
+  Receita do PDV tem de estar em Bruto. A planilha do Disparo de e-mail **não** leva a faixa.
 - **Cálculo é automático:** `recalcAndSaveResults` roda e grava na tabela `resultados` a cada
   mudança de PDV ou de dados mensais. NÃO existe mais página "Calcular" (era redundante — removida).
   Financeiro/Dashboard leem `resultados`; o Demonstrativo calcula ao vivo; `handleSelectPeriod`
@@ -112,8 +130,8 @@ O papel (`user_roles.role`) é conferido **dentro do banco**, não só na tela. 
   **`open`** — ao abrir Novo/Editar PDV a seção já aparece preenchida, sem precisar clicar.
 - **Exportar cadastro (`exportarCadastro` no `PdvManager`):** botão "⬇ Exportar cadastro" ao lado de
   "+ Novo PDV", **só para master/admin** (`podeExportar`) porque a planilha leva dados bancários.
-  Gera xlsx com 16 colunas (ID, PDV, tipo, receita, %, kWh, mínimo, dia pgto, os 7 campos bancários e
-  e-mail), ordenado por nome, com filtro e primeira linha congelada; o e-mail vem do mapa `emails` que
+  Gera xlsx com 19 colunas (ID, PDV, tipo, receita, %, kWh, mínimo, as 3 da faixa de faturamento, dia
+  pgto, os 7 campos bancários e e-mail), ordenado por nome, com filtro e primeira linha congelada; o e-mail vem do mapa `emails` que
   o `PdvManager` já carrega. Registra `audit_log` ("Exportou cadastro de PDVs"). **Existe de propósito
   dentro do sistema:** exportação de dado bancário é feita pela pessoa logada, com papel conferido e
   registro, em vez de arquivo solto gerado fora.
@@ -182,6 +200,7 @@ O papel (`user_roles.role`) é conferido **dentro do banco**, não só na tela. 
     (`gerarPdf`: abre uma janela com HTML pronto e chama `print()`, sem biblioteca; logo = `LOGO_SVG`).
     O PDF **não mostra o preço do kWh**, só consumo e valor (pedido do Iago). Tudo registra `audit_log`.
   - Demonstrativo e Disparo de e-mail **ainda são por loja** e não conhecem o rateio.
+  - Valor extra de faixa de faturamento (`extra_excess`) de uma loja do grupo fica com o dono dela, não entra no bolo.
 - **Papéis** (`user_roles.role`): `master`, `admin`, `usuario`, `view`, `pendente`.
   Cada página do menu tem sua lista de papéis permitidos.
 

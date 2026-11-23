@@ -248,6 +248,7 @@ const SB = {
       negotiated_percentage:Number(r.negotiated_percentage)||0,
       kwh_unity_price:Number(r.kwh_unity_price)||0,
       minimal_repass:Number(r.minimal_repass)||0,
+      tier_mode:r.tier_mode||"",tier_threshold:Number(r.tier_threshold)||0,tier_pct:Number(r.tier_pct)||0,
       energy_bill:Number(r.energy_bill)||0,
       payment_day:r.payment_day||20,
       bank_cnpj_cond:r.bank_cnpj_cond||"",bank_cnpj:r.bank_cnpj||"",
@@ -273,6 +274,7 @@ const SB = {
       negotiated_percentage:Number(pdv.negotiated_percentage)||0,
       kwh_unity_price:Number(pdv.kwh_unity_price)||0,
       minimal_repass:Number(pdv.minimal_repass)||0,
+      tier_mode:pdv.tier_mode||"",tier_threshold:Number(pdv.tier_threshold)||0,tier_pct:Number(pdv.tier_pct)||0,
       energy_bill:0,
       payment_day:Number(pdv.payment_day)||20,
       bank_cnpj_cond:pdv.bank_cnpj_cond||"",
@@ -654,13 +656,35 @@ function auditBatch(acao,items,periodoNome){
 }
 
 /* ─── Calculation engine ─── */
+/* ─── Variável por faixa de faturamento (opcional, cadastro do PDV) ───
+   tier_mode: ""               não usa
+              "extra_excess"   % EXTRA só sobre o que passar do limite, somado ao repasse (ex.: Porto Carioca:
+                               R$ 8.000 fixo + 8% do que passar de R$ 80 mil). Vale para qualquer tipo de contrato.
+              "replace_all"    passou do limite, o % do contrato TROCA e vale sobre o faturamento todo (7% vira 8%).
+              "replace_excess" % do contrato até o limite; o % novo só sobre o que passar.
+   A base é o faturamento CONSIDERADO (cr): bruto ou líquido, conforme o campo "Receita" do cadastro.
+   Os modos "replace" só fazem efeito em contrato que usa percentual do faturamento. */
+const TIER_MODES=[["","Não tem"],["extra_excess","% extra só sobre o que passar"],
+  ["replace_all","Troca o % sobre o faturamento todo"],["replace_excess","Troca o % só sobre o que passar"]];
+function faixaVar(pdv,cr,pct){
+  const lim=Number(pdv.tier_threshold)||0, tp=Number(pdv.tier_pct)||0, tm=pdv.tier_mode||"";
+  if(!tm||!(lim>0)||!(tp>0)||!(cr>lim)) return {pr:cr*pct,extra:0,on:false,txt:""};
+  const f2=v=>v.toFixed(2), pc=v=>`${Math.round(v*1e6)/1e4}%`;
+  if(tm==="extra_excess") return {pr:cr*pct,extra:(cr-lim)*tp,on:true,
+    txt:`Faixa: ${pc(tp)} sobre R$${f2(cr-lim)} (o que passou de R$${f2(lim)}) = R$${f2((cr-lim)*tp)}`};
+  if(tm==="replace_all") return {pr:cr*tp,extra:0,on:true,
+    txt:`Faixa: passou de R$${f2(lim)}, % vira ${pc(tp)} sobre R$${f2(cr)} = R$${f2(cr*tp)}`};
+  if(tm==="replace_excess") return {pr:lim*pct+(cr-lim)*tp,extra:0,on:true,
+    txt:`Faixa: ${pc(pct)} até R$${f2(lim)} + ${pc(tp)} sobre R$${f2(cr-lim)} = R$${f2(lim*pct+(cr-lim)*tp)}`};
+  return {pr:cr*pct,extra:0,on:false,txt:""};
+}
 function calc(pdv, ms, me, rev, eBillCond) {
   const ct=pdv.contract_type;
   if(ct==="Boleto") return {subtotal:0,total:0,details:"Boleto",energyBill:0,pctRevenue:0,calcRevenue:0};
   const kwh=pdv.kwh_unity_price||0, pct=pdv.negotiated_percentage||0;
   const mn=pdv.minimal_repass||0, adj=pdv.manual_adjustment||0;
   const rf=pdv.revenue_consideration==="Bruto"?1.0:LIQ;
-  const eb=(me-ms)*kwh, cr=rev*rf, pr=cr*pct;
+  const eb=(me-ms)*kwh, cr=rev*rf, fx=faixaVar(pdv,cr,pct), pr=fx.pr;
   let sub=0, det="";
   switch(ct){
     case"Fixo":sub=mn;det=`Fixo: R$${mn.toFixed(2)}`;break;
@@ -675,7 +699,8 @@ function calc(pdv, ms, me, rev, eBillCond) {
     case"Conta de Energia + Percentual do Faturamento":sub=pr+(eBillCond||0);det=`%F R$${pr.toFixed(2)}+Conta R$${(eBillCond||0).toFixed(2)}`;break;
     default:sub=0;
   }
-  return {subtotal:sub,total:sub+adj,energyBill:eb,pctRevenue:pr,calcRevenue:cr,details:det};
+  if(fx.on){sub+=fx.extra;det+=` | ${fx.txt}`;}
+  return {subtotal:sub,total:sub+adj,energyBill:eb,pctRevenue:pr,calcRevenue:cr,details:det,tierExtra:fx.extra};
 }
 
 /* ─── Rateio entre condomínios ───
@@ -1975,6 +2000,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
 
   const empty={id:"",name:"",contract_type:"Fixo",revenue_consideration:"Líquido",
     negotiated_percentage:0,kwh_unity_price:0,minimal_repass:0,manual_adjustment:0,
+    tier_mode:"",tier_threshold:0,tier_pct:0,
     manual_adjustment_description:"",payment_day:20,bank_cnpj_cond:"",bank_cnpj:"",
     bank_name:"",bank_banco:"",bank_agencia:"",bank_conta:"",bank_pix:""};
 
@@ -2020,6 +2046,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
       const reqs=[];const changesSummary=[];
       const fieldLabelMap={name:"Nome",contract_type:"Tipo contrato",revenue_consideration:"Receita",
         negotiated_percentage:"% Negociado",kwh_unity_price:"kWh preço",minimal_repass:"Mínimo",
+        tier_mode:"Faixa: regra",tier_threshold:"Faixa: a partir de",tier_pct:"Faixa: %",
         payment_day:"Dia pgto",bank_cnpj_cond:"CNPJ Cond",bank_cnpj:"CNPJ Conta",bank_name:"Nome Conta",
         bank_banco:"Banco",bank_agencia:"Agência",bank_conta:"Conta",bank_pix:"PIX"};
       if(isCreating){
@@ -2109,7 +2136,10 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
       ["ID",p=>p.id||""],["PDV",p=>p.name||""],
       ["Tipo de repasse",p=>p.contract_type||""],["Receita",p=>p.revenue_consideration||""],
       ["% negociado",p=>toPct(p.negotiated_percentage)||0],["Preço kWh",p=>p.kwh_unity_price||0],
-      ["Mínimo",p=>p.minimal_repass||0],["Dia pgto",p=>p.payment_day||20],
+      ["Mínimo",p=>p.minimal_repass||0],
+      ["Faixa: regra",p=>p.tier_mode?(TIER_MODES.find(m=>m[0]===p.tier_mode)||["",p.tier_mode])[1]:""],
+      ["Faixa: a partir de",p=>p.tier_mode?(p.tier_threshold||0):""],["Faixa: %",p=>p.tier_mode?toPct(p.tier_pct):""],
+      ["Dia pgto",p=>p.payment_day||20],
       ["CNPJ condomínio",p=>p.bank_cnpj_cond||""],["CNPJ da conta",p=>p.bank_cnpj||""],
       ["Nome da conta",p=>p.bank_name||""],["Banco",p=>p.bank_banco||""],
       ["Agência",p=>p.bank_agencia||""],["Conta",p=>p.bank_conta||""],["PIX",p=>p.bank_pix||""],
@@ -2117,7 +2147,7 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
     const lista=[...pdvs].sort((a,b)=>(a.name||"").localeCompare(b.name||"","pt-BR"));
     const aoa=[cols.map(c=>c[0]),...lista.map(p=>cols.map(c=>c[1](p)))];
     const ws=XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"]=[{wch:10},{wch:40},{wch:34},{wch:10},{wch:12},{wch:10},{wch:11},{wch:9},
+    ws["!cols"]=[{wch:10},{wch:40},{wch:34},{wch:10},{wch:12},{wch:10},{wch:11},{wch:32},{wch:16},{wch:9},{wch:9},
       {wch:20},{wch:20},{wch:34},{wch:16},{wch:10},{wch:14},{wch:24},{wch:34}];
     ws["!freeze"]={xSplit:0,ySplit:1};
     ws["!autofilter"]={ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:lista.length,c:cols.length-1}})};
@@ -2159,7 +2189,8 @@ function PdvManager({pdvs,setPdvs,save,prefilled,onPrefilledHandled,userRole,onR
           <tr style={isEditingThis?{background:"var(--accent-bg)"}:undefined}>
           <td className="mono">{p.id}</td>
           <td className="trunc" style={{fontWeight:500}}>{p.name}</td>
-          <td><span className="chip">{p.contract_type}</span></td>
+          <td><span className="chip">{p.contract_type}</span>{p.tier_mode&&<span className="badge badge-warn" style={{marginLeft:6}}
+            title={`${(TIER_MODES.find(m=>m[0]===p.tier_mode)||["",""])[1]}: acima de ${fmt(p.tier_threshold)}, ${toPct(p.tier_pct)}%`}>faixa</span>}</td>
           <td><span className={`badge ${p.revenue_consideration==="Bruto"?"badge-warn":"badge-info"}`}>{p.revenue_consideration}</span></td>
           <td className="mono">{((p.negotiated_percentage||0)*100).toFixed(1)}%</td>
           <td className="mono">{p.kwh_unity_price||"-"}</td>
@@ -2244,7 +2275,10 @@ function PdvForm({pdv,email="",onSave,onCancel,isUsuario,syncLocais=[],codigosCa
   // O separador tem de ser "," — ponto-e-vírgula quebra o sistema de disparo na exportação.
   const emailParts=(em||"").split(",").map(x=>x.trim()).filter(Boolean);
   const emailBad=emailParts.length>0 && !emailParts.every(x=>/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/.test(x));
-  const bloqueiaSalvar=(!isEdit && !!dupWarn) || cnpjCondBad || cnpjContaBad || emailBad;
+  // Faixa de faturamento: se escolheu uma regra, precisa do limite e do percentual.
+  const tierBad=!!f.tier_mode&&(!(Number(f.tier_threshold)>0)||!(Number(f.tier_pct)>0));
+  const tierSemPct=!!f.tier_mode&&f.tier_mode!=="extra_excess"&&!String(f.contract_type||"").includes("Percentual");
+  const bloqueiaSalvar=(!isEdit && !!dupWarn) || cnpjCondBad || cnpjContaBad || emailBad || tierBad;
 
   return <div className="card fade-in" style={{border:"2px solid var(--accent)",marginBottom:16}}>
     <div className="h3">{isEdit?"Editar":"Novo"} PDV {isUsuario&&<span style={{fontSize:11,fontWeight:400,color:"var(--color-text-secondary)",fontStyle:"italic"}}>(sujeito a aprovação)</span>}</div>
@@ -2308,6 +2342,28 @@ function PdvForm({pdv,email="",onSave,onCancel,isUsuario,syncLocais=[],codigosCa
       <Field label="kWh preço"><input type="number" step="0.01" placeholder="0" value={f.kwh_unity_price||""} onFocus={e=>e.target.select()} onChange={e=>s("kwh_unity_price",parseFloat(e.target.value)||0)}/></Field>
       <Field label="Mínimo"><input type="number" step="0.01" placeholder="0" value={f.minimal_repass||""} onFocus={e=>e.target.select()} onChange={e=>s("minimal_repass",parseFloat(e.target.value)||0)}/></Field>
       <Field label="Dia pgto"><input type="number" value={f.payment_day} onFocus={e=>e.target.select()} onChange={e=>s("payment_day",parseInt(e.target.value)||20)}/></Field>
+    </div>
+    <div style={{marginTop:12}}>
+      <div style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:10}}>Faixa de faturamento <span style={{fontWeight:400,fontStyle:"italic"}}>(opcional: só para contrato que muda quando o faturamento passa de um valor)</span></div>
+      <div className="grid3">
+        <Field label="Regra"><select value={f.tier_mode||""} onChange={e=>s("tier_mode",e.target.value)}>
+          {TIER_MODES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></Field>
+        {f.tier_mode&&<Field label="Quando o faturamento passar de (R$)"><input type="number" step="0.01" placeholder="0" value={f.tier_threshold||""} onFocus={e=>e.target.select()} onChange={e=>s("tier_threshold",parseFloat(e.target.value)||0)}/></Field>}
+        {f.tier_mode&&<Field label={f.tier_mode==="extra_excess"?"% extra":"Novo %"}><input type="number" step="0.01" placeholder="0" value={toPct(f.tier_pct)||""} onFocus={e=>e.target.select()} onChange={e=>s("tier_pct",(parseFloat(e.target.value)||0)/100)}/></Field>}
+      </div>
+      {f.tier_mode&&(()=>{
+        const lim=Number(f.tier_threshold)||0,tp=Number(f.tier_pct)||0,pc=Number(f.negotiated_percentage)||0;
+        const ex=lim*1.25,liq=f.revenue_consideration!=="Bruto";
+        const base=`A conta usa o faturamento ${liq?"líquido (bruto × 0,87)":"bruto"}, conforme o campo Receita.`;
+        let txt="Preencha o valor e o percentual.";
+        if(lim>0&&tp>0){
+          if(f.tier_mode==="extra_excess") txt=`Enquanto o faturamento ficar até ${fmt(lim)}, nada muda. Passando disso, soma ${toPct(tp)}% só sobre o que passou. Exemplo: com ${fmt(ex)}, entra mais ${fmt((ex-lim)*tp)}.`;
+          else if(f.tier_mode==="replace_all") txt=`Até ${fmt(lim)} vale o % do contrato (${toPct(pc)}%). Passando disso, o % vira ${toPct(tp)}% sobre o faturamento todo. Exemplo: com ${fmt(ex)}, o percentual dá ${fmt(ex*tp)} em vez de ${fmt(ex*pc)}.`;
+          else txt=`Até ${fmt(lim)} vale o % do contrato (${toPct(pc)}%). Só sobre o que passar vale ${toPct(tp)}%. Exemplo: com ${fmt(ex)}, o percentual dá ${fmt(lim*pc+(ex-lim)*tp)} em vez de ${fmt(ex*pc)}.`;
+        }
+        return <div style={{fontSize:11,color:"var(--color-text-secondary)",marginTop:-2,lineHeight:1.5}}>{txt} {base}
+          {tierSemPct&&<div style={{color:"var(--red,#f2401a)",fontWeight:600,marginTop:4}}>Este tipo de contrato não usa percentual do faturamento, então trocar o % não muda nada. Para somar um valor quando passar do limite, use "% extra só sobre o que passar".</div>}
+        </div>;})()}
     </div>
     <div style={{marginTop:12}}>
       <div style={{fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:10}}>E-mail</div>
@@ -3544,16 +3600,17 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
 
   const rows=typePdvs.map(p=>{const ep=editMode?getPdv(p):p;const d=editMode?(localMd[p.id]||{}):(md[p.id]||{});
     const ms=d.meter_start||0,me=d.meter_end||0,raw=d.raw_revenue||0,kwh=ep.kwh_unity_price||0,pct=ep.negotiated_percentage||0,mn=ep.minimal_repass||0,adj=d.manual_adjustment||ep.manual_adjustment||0;
-    const rf=ep.revenue_consideration==="Bruto"?1.0:LIQ,eb=(me-ms)*kwh,cr=raw*rf,pr=cr*pct,eBillCond=d.energy_bill_cond||0;
+    const rf=ep.revenue_consideration==="Bruto"?1.0:LIQ,eb=(me-ms)*kwh,cr=raw*rf,fx=faixaVar(ep,cr,pct),pr=fx.pr,eBillCond=d.energy_bill_cond||0;
     let sub=0;
     switch(selType){case"Fixo":sub=mn;break;case"Medidor":sub=eb;break;case"Percentual do Faturamento":sub=pr;break;
       case"Medidor + Mínimo":sub=eb+mn;break;case"Medidor + Percentual de Faturamento":sub=eb+pr;break;
       case"Percentual do Faturamento + Mínimo":sub=pr+mn;break;case"Percentual do Faturamento OU Mínimo":sub=Math.max(pr,mn);break;
       case"Medidor OU Percentual de Faturamento":sub=Math.max(eb,pr);break;case"Medidor OU Percentual de Faturamento OU Mínimo":sub=Math.max(eb,pr,mn);break;
       case"Conta de Energia + Percentual do Faturamento":sub=pr+eBillCond;break;default:sub=0;}
+    sub+=fx.extra; // variável por faixa de faturamento (cadastro do PDV)
     let winner="";if(hasOU){const vals=[];if(hasMeter)vals.push({name:"Energia",val:eb});if(hasRev)vals.push({name:"%Fat",val:pr});if(hasMin)vals.push({name:"Mínimo",val:mn});
       const maxVal=Math.max(...vals.map(v=>v.val));winner=vals.find(v=>v.val===maxVal)?.name||"";}
-    return {p:ep,pid:p.id,ms,me,eb,raw,cr,pr,mn,adj,sub,total:sub+adj,kwh,pct,rf,eBillCond,winner,revType:ep.revenue_consideration};
+    return {p:ep,pid:p.id,ms,me,eb,raw,cr,pr,mn,adj,sub,total:sub+adj,kwh,pct,rf,eBillCond,winner,revType:ep.revenue_consideration,fx};
   });
   // Ordenação por coluna (não altera os totais; só a ordem de exibição).
   if(sortKey&&!editMode){
@@ -3678,7 +3735,7 @@ function Demonstrativo({pdvs,setPdvs,md,setMd,period,activePeriod,allPeriods,onS
           <td className="mono" style={{fontWeight:600,color:r.pr>0?"inherit":"var(--color-text-tertiary)"}}>{r.pr>0?fmt(r.pr):"-"}</td></>}
         {isEnergyConta&&<td className="mono" style={editMode?{}:(()=>{const v=Number(r.eBillCond)||0;if(v>1500)return {background:"#fee2e2",color:"#991b1b",fontWeight:700};if(v>0&&v<200)return {background:"#fef3c7",color:"#92400e",fontWeight:600};return {};})()}>{editMode?ec(r.pid,"energy_bill_cond",r.eBillCond,true,90):(r.eBillCond>0?fmt(r.eBillCond):"-")}</td>}
         {hasOU&&<td><span className={`badge ${r.winner==="Energia"?"badge-warn":r.winner==="%Fat"?"badge-info":"badge-ok"}`}>{r.winner}</span></td>}
-        <td className="mono" style={{fontWeight:600}}>{fmt(r.sub)}</td>
+        <td className="mono" style={{fontWeight:600}}>{fmt(r.sub)}{r.fx&&r.fx.on&&<span className="badge badge-warn" title={r.fx.txt} style={{marginLeft:6,cursor:"help"}}>faixa</span>}</td>
         <td className="mono">{editMode?ec(r.pid,"manual_adjustment",r.adj,true,80):<span style={{color:r.adj!==0?"var(--warn)":"var(--color-text-tertiary)"}}>{r.adj!==0?fmt(r.adj):"-"}</span>}</td>
         <td className="mono" style={{fontWeight:700,background:r.total<0?"#fee2e2":"var(--accent-bg)",color:r.total<0?"#991b1b":"var(--accent)"}}>{fmt(r.total)}</td>
       </tr>;})}
@@ -4176,7 +4233,7 @@ function AdminPanel({userRole,onRefresh,allPdvs=[],onApproved}){
     try{
       // If approved, apply the actual change to the database
       if(status==="aprovado"){
-        const numericFields=new Set(["negotiated_percentage","kwh_unity_price","minimal_repass","payment_day",
+        const numericFields=new Set(["negotiated_percentage","kwh_unity_price","minimal_repass","payment_day","tier_threshold","tier_pct",
           "meter_start","meter_end","raw_revenue","manual_adjustment","energy_bill_cond"]);
         const intFields=new Set(["payment_day"]);
         let parsedVal=req.valor_novo;
@@ -5208,6 +5265,7 @@ export default function App() {
     const auditItems=[];
     const fieldLabels={name:"Nome",contract_type:"Tipo contrato",revenue_consideration:"Consideração receita",
       negotiated_percentage:"% negociado",kwh_unity_price:"Preço kWh",minimal_repass:"Repasse mínimo",
+      tier_mode:"Faixa: regra",tier_threshold:"Faixa: a partir de",tier_pct:"Faixa: %",
       payment_day:"Dia pagamento",bank_cnpj_cond:"CNPJ cond",bank_cnpj:"CNPJ",bank_name:"Nome conta",
       bank_banco:"Banco",bank_agencia:"Agência",bank_conta:"Conta",bank_pix:"PIX"};
     let needsReload=false;
@@ -5267,6 +5325,7 @@ export default function App() {
         try{await SB.patchPdv(np.uuid,{nome:np.name,contract_type:np.contract_type,
           revenue_consideration:np.revenue_consideration,negotiated_percentage:np.negotiated_percentage,
           kwh_unity_price:np.kwh_unity_price,minimal_repass:np.minimal_repass,
+          tier_mode:np.tier_mode||"",tier_threshold:Number(np.tier_threshold)||0,tier_pct:Number(np.tier_pct)||0,
           payment_day:np.payment_day,bank_cnpj_cond:np.bank_cnpj_cond,bank_cnpj:np.bank_cnpj,
           bank_name:np.bank_name,bank_banco:np.bank_banco,bank_agencia:np.bank_agencia,
           bank_conta:np.bank_conta,bank_pix:np.bank_pix});}catch(e){console.error("Patch PDV error:",e);}
