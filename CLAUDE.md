@@ -10,7 +10,7 @@ quanto cada ponto de venda recebe por período conforme o tipo de contrato, gera
 demonstrativos, dados financeiros/bancários e planilhas de disparo de e-mail.
 
 ## Stack
-- **React 18 + Vite** (sem TypeScript). Praticamente tudo vive em um único arquivo: `src/App.jsx` (~4400 linhas).
+- **React 18 + Vite** (sem TypeScript). Praticamente tudo vive em um único arquivo: `src/App.jsx` (~5650 linhas).
 - **Supabase** (PostgreSQL + Auth + Realtime), acessado por um adapter REST próprio (objeto `SB` no topo do `App.jsx`) — **não** usa o SDK `@supabase/supabase-js`.
 - **GitHub Pages** para hospedagem. Sem backend próprio.
 - Única dependência de runtime além do React: `xlsx` (geração/leitura de planilhas).
@@ -31,7 +31,7 @@ GitHub Pages: https://iagonascimento-dotcom.github.io/roda-repasse/
 - Tabelas principais (schema `public`): `pdvs`, `periodos`, `dados_mensais`, `resultados`
   (guarda snapshots do contrato na época do cálculo), `user_roles`, `change_requests`
   (fluxo de aprovação de alterações), `audit_log`, `pdvs_ignorados` (PDVs que não recebem
-  repasse), `pdv_emails`, `mcr`, `menu_config`. Há também a view `sync.locais` (base
+  repasse), `pdv_emails`, `mcr`, `menu_config`, `rateio_grupos` (rateio entre condomínios). Há também a view `sync.locais` (base
   sincronizada, fonte de verdade dos locais — acesso via header `Accept-Profile: sync`;
   campos usados: `codigo` = ID VMpay, `local` = nome, + endereço/cidade/estado).
 - **Realtime** via WebSocket nativo (`SB.subscribeRealtime`), sem dependência extra. **Atenção:** o
@@ -159,6 +159,29 @@ O papel (`user_roles.role`) é conferido **dentro do banco**, não só na tela. 
   vinculados/sem vínculo, testa a leitura na hora (⚡ Testar) e tem a **trava** (🔒) que só o master
   altera. O botão "⟳ Atualizar lista da Tuya" relista e grava aparelhos novos **sem tocar nos vínculos
   existentes**. Um PDV já usado some do dropdown dos outros (índice único em `pdv_uuid`).
+- **Rateio entre condomínios (página "Rateio", chave `rateio`, ícone `percent`, master/admin):** para
+  lojas cujo repasse é dividido entre 2+ condomínios (caso real: Jardim Botafogo, com Highlight +
+  Highlight Quadra e Spotlight, 73,452% / 26,548%). Tabela **`rateio_grupos`**: `nome`, `ativo` e
+  `beneficiarios` (jsonb) = `[{nome, pct, lojas:[vmpay_id]}]`, com `pct` em **fração** somando 1.
+  **Regra (função `calcRateio`, logo depois do `calc()`):** a parte **própria** de cada loja (luz,
+  mínimo e ajuste manual) fica com o condomínio dono dela; **só o percentual do faturamento** das
+  lojas do grupo é somado ("bolo") e rateado. `partesRateio(r)` separa as partes de um resultado: em
+  contrato "X + Percentual" ou percentual puro, o rateável é o `pctRevenue`; em contrato "OU" só é
+  rateável quando o percentual foi o valor que venceu. Cada parte é arredondada a centavos e o
+  **último condomínio leva o resto do bolo**, então a soma sempre fecha com o total das lojas.
+  **O cálculo por loja não muda** (`calc`/`resultados` seguem por PDV); o rateio só redistribui na
+  hora de pagar:
+  - **Financeiro:** com grupo ativo e completo, as linhas das lojas somem e entra **uma linha por
+    condomínio** com o valor dividido (selo "rateio"), inclusive no CSV. A conta bancária é a do
+    cadastro da **primeira loja** da lista do condomínio. No modo "Editar dados" voltam as lojas
+    separadas. Se faltar resultado de alguma loja ou os percentuais não somarem 100%, o rateio **não
+    é aplicado** e aparece um aviso (as lojas ficam separadas).
+  - **Página Rateio:** cria/edita grupos (uma loja não pode estar em dois condomínios nem em dois
+    grupos; o seletor esconde as já usadas), mostra a apuração do período ativo, exporta planilha
+    (aba "Divisão" no formato de pagamento + "Memória de cálculo") e gera o **PDF para o condomínio**
+    (`gerarPdf`: abre uma janela com HTML pronto e chama `print()`, sem biblioteca; logo = `LOGO_SVG`).
+    O PDF **não mostra o preço do kWh**, só consumo e valor (pedido do Iago). Tudo registra `audit_log`.
+  - Demonstrativo e Disparo de e-mail **ainda são por loja** e não conhecem o rateio.
 - **Papéis** (`user_roles.role`): `master`, `admin`, `usuario`, `view`, `pendente`.
   Cada página do menu tem sua lista de papéis permitidos.
 

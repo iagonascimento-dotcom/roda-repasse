@@ -25,6 +25,7 @@ const PAGE_REGISTRY = [
   ["entrada","keyboard","Entrada dados",["master","admin"]],
   ["demo","receipt","Demonstrativo",["master","admin","usuario"]],
   ["fin","wallet","Financeiro",["master","admin"]],
+  ["rateio","percent","Rateio",["master","admin"]],
   ["disparo","mail","Disparo E-mail",["master","admin"]],
 ];
 const PAGE_MAP = Object.fromEntries(PAGE_REGISTRY.map(p=>[p[0],{ic:p[1],lb:p[2],roles:p[3]}]));
@@ -523,6 +524,20 @@ const SB = {
       {method:"DELETE",headers:{"Prefer":"return=minimal"}});
   },
 
+  /* ─── Rateio (tabela rateio_grupos): lojas cujo repasse é dividido entre condomínios ─── */
+  async loadRateios(){
+    return this.api("/rest/v1/rateio_grupos?select=*&order=nome");
+  },
+  async saveRateio(g,byEmail){
+    const body={nome:g.nome,ativo:g.ativo!==false,beneficiarios:g.beneficiarios||[],
+      updated_at:new Date().toISOString(),updated_by:byEmail||""};
+    if(g.id) await this.api(`/rest/v1/rateio_grupos?id=eq.${g.id}`,{method:"PATCH",body:JSON.stringify(body),headers:{"Prefer":"return=minimal"}});
+    else await this.api("/rest/v1/rateio_grupos",{method:"POST",body:JSON.stringify(body),headers:{"Prefer":"return=minimal"}});
+  },
+  async deleteRateio(id){
+    await this.api(`/rest/v1/rateio_grupos?id=eq.${id}`,{method:"DELETE",headers:{"Prefer":"return=minimal"}});
+  },
+
   /* ─── Locais sincronizados (fonte de verdade: schema sync, view locais) ─── */
   // Só PDVs. O schema sync é exposto na API; acesso via header Accept-Profile.
   async loadSyncLocais(){
@@ -661,6 +676,48 @@ function calc(pdv, ms, me, rev, eBillCond) {
     default:sub=0;
   }
   return {subtotal:sub,total:sub+adj,energyBill:eb,pctRevenue:pr,calcRevenue:cr,details:det};
+}
+
+/* ─── Rateio entre condomínios ───
+   Um grupo (tabela rateio_grupos) junta lojas cujo repasse é dividido entre 2+ condomínios.
+   Regra: a parte PRÓPRIA de cada loja (luz, mínimo, ajuste manual) fica com o condomínio dono
+   da loja; só o PERCENTUAL DO FATURAMENTO das lojas do grupo é somado ("bolo") e rateado pelos
+   percentuais. O último condomínio leva o resto do bolo, para a soma fechar no centavo.
+   O cálculo por loja (calc/resultados) não muda: o rateio só redistribui na hora de pagar. */
+const r2=v=>Math.round((Number(v)||0)*100)/100;
+function partesRateio(r){
+  const total=r2(r.total), ajuste=r2((r.total||0)-(r.subtotal||0)), base=r2(total-ajuste);
+  const ct=r.contract_type||"", pr=r2(r.pctRevenue);
+  let rateavel=0;
+  if(ct.includes("Percentual")){
+    // "OU": só é rateável se o percentual foi o valor que venceu; "+" ou percentual puro: sempre.
+    if(ct.includes(" OU ")) rateavel=(pr>0&&Math.abs(pr-base)<0.005)?pr:0;
+    else rateavel=pr;
+  }
+  return {total,ajuste,rateavel,luz:r2(total-ajuste-rateavel)};
+}
+function calcRateio(grupo,results,pdvs){
+  const ben=grupo.beneficiarios||[], lojas=[], faltando=[];
+  ben.forEach((b,bi)=>(b.lojas||[]).forEach(cod=>{
+    const r=(results||[]).find(x=>String(x.id)===String(cod));
+    const p=(pdvs||[]).find(x=>String(x.id)===String(cod));
+    if(!r){faltando.push({id:String(cod),name:p?p.name:String(cod)});return;}
+    lojas.push({id:String(cod),name:(p&&p.name)||r.name||String(cod),bi,dono:b.nome,...partesRateio(r)});
+  }));
+  const soma=k=>r2(lojas.reduce((s,l)=>s+l[k],0));
+  const bolo=soma("rateavel");
+  let usado=0;
+  const partes=ben.map((b,bi)=>{
+    const minhas=lojas.filter(l=>l.bi===bi);
+    const luz=r2(minhas.reduce((s,l)=>s+l.luz,0)), ajuste=r2(minhas.reduce((s,l)=>s+l.ajuste,0));
+    const parte=bi===ben.length-1?r2(bolo-usado):r2(bolo*(Number(b.pct)||0));
+    usado=r2(usado+parte);
+    const ref=(pdvs||[]).find(x=>String(x.id)===String((b.lojas||[])[0]))||null; // conta = cadastro da 1ª loja
+    return {nome:b.nome,pct:Number(b.pct)||0,lojas:minhas,luz,ajuste,parte,valor:r2(luz+ajuste+parte),ref};
+  });
+  const somaPct=ben.reduce((s,b)=>s+(Number(b.pct)||0),0);
+  return {lojas,partes,bolo,faltando,total:soma("total"),luz:soma("luz"),ajuste:soma("ajuste"),
+    pctOk:Math.abs(somaPct-1)<1e-6, ok:faltando.length===0&&lojas.length>0&&ben.length>1&&Math.abs(somaPct-1)<1e-6};
 }
 
 const fmt=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(v||0);
@@ -3052,7 +3109,7 @@ function Pendencias({pdvs,setPdvs,md,setMd,savePdvs,saveMd,onDirty,userRole,onRe
 }
 
 /* ─── Financeiro ─── */
-function Financeiro({pdvs,setPdvs,results,period,savePdvs,onDirty}) {
+function Financeiro({pdvs,setPdvs,results,period,savePdvs,onDirty,rateios}) {
   const [dayFilter,setDayFilter]=useState("all");
   const [search,setSearch]=useState("");
   const [editMode,setEditMode]=useState(false);
@@ -3077,15 +3134,30 @@ function Financeiro({pdvs,setPdvs,results,period,savePdvs,onDirty}) {
       agencia:getVal(p.id,"bank_agencia"),conta:getVal(p.id,"bank_conta"),pix:getVal(p.id,"bank_pix")};
   }).filter(Boolean);
 
-  const filtered=rows.filter(r=>{
+  // Rateio: as lojas de um grupo saem da lista e entram as linhas por condomínio, com o valor já
+  // dividido (ver calcRateio). Não vale no modo edição, que mexe no cadastro de cada loja.
+  let rowsPg=rows;const ratOk=[],ratPend=[];
+  if(!editMode)(rateios||[]).filter(g=>g.ativo!==false).forEach(g=>{
+    const c=calcRateio(g,results,pdvs);
+    if(!c.ok){if(c.lojas.length>0||c.faltando.length>0)ratPend.push(g.nome);return;}
+    const ids=new Set(c.lojas.map(l=>l.id));
+    const novas=c.partes.map(pt=>{const p=pt.ref||{};
+      return {id:String(p.id||""),name:`${pt.nome} (rateio ${g.nome})`,payment_day:p.payment_day||20,total:pt.valor,rateio:true,
+        cnpj_cond:p.bank_cnpj_cond||"",cnpj:p.bank_cnpj||"",bank_name:p.bank_name||"",banco:p.bank_banco||"",
+        agencia:p.bank_agencia||"",conta:p.bank_conta||"",pix:p.bank_pix||""};});
+    rowsPg=rowsPg.filter(r=>!ids.has(String(r.id))).concat(novas);
+    ratOk.push(`${g.nome} (${c.lojas.length} lojas viram ${c.partes.length} pagamentos)`);
+  });
+
+  const filtered=rowsPg.filter(r=>{
     const matchDay=dayFilter==="all"||(dayFilter==="20"&&r.payment_day===20)||(dayFilter==="3"&&r.payment_day===3);
     return matchDay&&(!search||r.name.toLowerCase().includes(search.toLowerCase())||r.id.includes(search));
   }).sort((a,b)=>a.name.localeCompare(b.name));
 
   const total=filtered.reduce((s,r)=>s+r.total,0);
-  const count20=rows.filter(r=>r.payment_day===20).length;const count3=rows.filter(r=>r.payment_day===3).length;
-  const total20=rows.filter(r=>r.payment_day===20).reduce((s,r)=>s+r.total,0);
-  const total3=rows.filter(r=>r.payment_day===3).reduce((s,r)=>s+r.total,0);
+  const count20=rowsPg.filter(r=>r.payment_day===20).length;const count3=rowsPg.filter(r=>r.payment_day===3).length;
+  const total20=rowsPg.filter(r=>r.payment_day===20).reduce((s,r)=>s+r.total,0);
+  const total3=rowsPg.filter(r=>r.payment_day===3).reduce((s,r)=>s+r.total,0);
 
   function requestSave(){
     const changes=[];
@@ -3123,7 +3195,9 @@ function Financeiro({pdvs,setPdvs,results,period,savePdvs,onDirty}) {
           {filtered.length>0&&<button className="btn btn-s" onClick={()=>setEditMode(true)} style={{border:"1.5px dashed var(--accent)",color:"var(--accent)"}}>✎ Editar dados</button>}</>}
       </div>
     </div>
-    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:20}}>Período: <strong>{period||"Não definido"}</strong></div>
+    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:ratOk.length||ratPend.length?8:20}}>Período: <strong>{period||"Não definido"}</strong></div>
+    {ratOk.length>0&&<div style={{fontSize:12,color:"var(--accent)",marginBottom:ratPend.length?6:20}}>Rateio aplicado: {ratOk.join("; ")}. O detalhe está na página <strong>Rateio</strong>.</div>}
+    {ratPend.length>0&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg,#fff4e5)",color:"#92400e",fontSize:12,marginBottom:20}}>Rateio NÃO aplicado em: {ratPend.join(", ")}. Falta valor calculado de alguma loja ou os percentuais não somam 100%. Veja a página Rateio.</div>}
 
     {results.length===0?<div className="card empty"><div style={{fontSize:28,marginBottom:8}}>⚠</div>Ainda não há valores calculados. Preencha os medidores e o faturamento na <strong>Entrada de dados</strong> — o cálculo é automático.</div>:<>
       <div className="grid3" style={{marginBottom:20}}>
@@ -3142,9 +3216,9 @@ function Financeiro({pdvs,setPdvs,results,period,savePdvs,onDirty}) {
         <thead><tr><th>Id</th><th>Local</th>
           {bankFields.map(f=><th key={f.key} style={editMode?{background:"#fffbe6"}:{}}>{f.label}{editMode&&" ✎"}</th>)}
           <th style={{background:"var(--accent-bg)"}}>Total</th></tr></thead>
-        <tbody>{filtered.map(r=><tr key={r.id}>
+        <tbody>{filtered.map(r=><tr key={(r.rateio?"rt-":"")+r.id}>
           <td className="mono" style={{fontSize:11}}>{r.id}</td>
-          <td style={{fontWeight:500,whiteSpace:"nowrap"}}>{r.name}</td>
+          <td style={{fontWeight:500,whiteSpace:"nowrap"}}>{r.name}{r.rateio&&<span className="badge badge-info" style={{marginLeft:6}}>rateio</span>}</td>
           {editMode?bankFields.map(f=><td key={f.key}><input style={{...editSt,width:f.w}} value={getVal(r.id,f.key)} onChange={e=>setVal(r.id,f.key,e.target.value)}/></td>)
             :<><td style={{textAlign:"center"}}><span className={`badge ${r.payment_day===3?"badge-warn":"badge-info"}`}>Dia {r.payment_day}</span></td>
             <td className="mono" style={{fontSize:11}}>{r.cnpj_cond||"-"}</td>
@@ -3161,6 +3235,228 @@ function Financeiro({pdvs,setPdvs,results,period,savePdvs,onDirty}) {
           <td className="mono" style={{background:"var(--accent-bg)",color:"var(--accent)",fontSize:14}}>{fmt(total)}</td></tr>
         </tbody></table></div></div>
     </>}
+  </div>;
+}
+
+/* ─── Página Rateio ─── grupos de lojas cujo repasse é dividido entre condomínios (ver calcRateio). */
+const fmtPctR=v=>String(Math.round((Number(v)||0)*1e8)/1e6).replace(".",",")+"%";
+const escH=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function Rateio({pdvs,results,md,period,activePeriod,rateios,onReload,userRole}){
+  const [ed,setEd]=useState(null); // grupo em edição: {id,nome,ativo,beneficiarios:[{nome,pctTxt,lojas}]}
+  const [busy,setBusy]=useState(false);
+  const [confirm,setConfirm]=useState(null);
+  const nomePdv=id=>{const p=pdvs.find(x=>String(x.id)===String(id));return p?p.name:String(id);};
+  const z2=n=>String(n).padStart(2,"0");
+  const ciclo=activePeriod?`13/${z2(activePeriod.mes===1?12:activePeriod.mes-1)}/${activePeriod.mes===1?activePeriod.ano-1:activePeriod.ano} a 12/${z2(activePeriod.mes)}/${activePeriod.ano}`:"";
+  const kwhDe=id=>{const d=(md||{})[id];if(!d)return null;const k=(Number(d.meter_end)||0)-(Number(d.meter_start)||0);return k>0?k:null;};
+  const numPct=t=>parseFloat(String(t).replace(",","."));
+
+  function abrir(g){
+    const base=g?g.beneficiarios||[]:[{nome:"",pct:0,lojas:[]},{nome:"",pct:0,lojas:[]}];
+    setEd({id:g?g.id:null,nome:g?g.nome:"",ativo:g?g.ativo!==false:true,
+      beneficiarios:base.map(b=>({nome:b.nome||"",pctTxt:b.pct?String(Math.round(b.pct*1e8)/1e6).replace(".",","):"",lojas:(b.lojas||[]).map(String)}))});
+  }
+  const setB=(i,patch)=>setEd(e=>({...e,beneficiarios:e.beneficiarios.map((b,j)=>j===i?{...b,...patch}:b)}));
+  // Lojas já usadas (em outro grupo ou em outro condomínio deste grupo) somem do seletor.
+  const usadas=new Set();
+  (rateios||[]).forEach(g=>{if(!ed||g.id!==ed.id)(g.beneficiarios||[]).forEach(b=>(b.lojas||[]).forEach(l=>usadas.add(String(l))));});
+  if(ed)ed.beneficiarios.forEach(b=>b.lojas.forEach(l=>usadas.add(String(l))));
+  const livres=[...pdvs].filter(p=>!usadas.has(String(p.id))).sort((a,b)=>(a.name||"").localeCompare(b.name||"","pt-BR"));
+
+  function erroEd(){
+    if(!ed)return "";
+    if(!ed.nome.trim())return "Dê um nome ao grupo.";
+    if(ed.beneficiarios.length<2)return "O grupo precisa de pelo menos 2 condomínios.";
+    let soma=0;
+    for(const b of ed.beneficiarios){
+      if(!b.nome.trim())return "Preencha o nome de todos os condomínios.";
+      const n=numPct(b.pctTxt);
+      if(!(n>0))return `Informe o percentual de ${b.nome}.`;
+      soma+=n;
+      if(!b.lojas.length)return `Escolha pelo menos uma loja de ${b.nome}.`;
+    }
+    if(Math.abs(soma-100)>0.0005)return `Os percentuais somam ${String(Math.round(soma*1e6)/1e6).replace(".",",")}%. Precisam somar 100%.`;
+    return "";
+  }
+  async function salvar(){
+    const g={id:ed.id,nome:ed.nome.trim(),ativo:ed.ativo,beneficiarios:ed.beneficiarios.map(b=>({
+      nome:b.nome.trim(),pct:Math.round(numPct(b.pctTxt)*1e6)/1e8,lojas:b.lojas.map(String)}))};
+    setBusy(true);
+    try{
+      await SB.saveRateio(g,userRole?.email||"");
+      audit(ed.id?"Editou grupo de rateio":"Criou grupo de rateio",{entidade:"rateio",entidade_nome:g.nome,
+        descricao:g.beneficiarios.map(b=>`${b.nome}: ${fmtPctR(b.pct)} (lojas ${b.lojas.join(", ")})`).join(" | ")});
+      setEd(null);await onReload();
+    }catch(e){alert("Erro ao salvar o grupo: "+e.message);}
+    setBusy(false);
+  }
+  function excluir(g){
+    setConfirm({msg:`Excluir o grupo de rateio "${g.nome}"?`,
+      detail:"As lojas voltam a aparecer separadas no Financeiro, cada uma com o próprio repasse. Nenhum cálculo é apagado.",
+      onConfirm:async()=>{setConfirm(null);
+        try{await SB.deleteRateio(g.id);audit("Excluiu grupo de rateio",{entidade:"rateio",entidade_nome:g.nome});await onReload();}
+        catch(e){alert("Erro ao excluir: "+e.message);}}});
+  }
+
+  function exportar(g,c){
+    const pag=[["Id do Local","Local","Data de Pagamento","CNPJ CONDOMINIO","CNPJ da Conta","Nome da Conta","Banco","Agência","Número da Conta","Chave Pix","Total"],
+      ...c.partes.map(pt=>{const p=pt.ref||{};return [p.id||"",`${pt.nome} (rateio ${g.nome})`,p.payment_day||20,p.bank_cnpj_cond||"",
+        p.bank_cnpj||"",p.bank_name||"",p.bank_banco||"",p.bank_agencia||"",p.bank_conta||"",p.bank_pix||"",pt.valor];})];
+    const mem=[[`Rateio do repasse · ${g.nome}`],[`Referência: ${period||""}${ciclo?" · ciclo "+ciclo:""}`],
+      ["Regra: a luz (e ajustes) fica com o condomínio dono de cada loja; só o percentual do faturamento é somado e rateado."],[],
+      ["1. Repasse apurado por loja"],
+      ["Id do Local","Loja","Condomínio dono","Consumo (kWh)","Luz","Ajuste","Percentual do faturamento","Repasse da loja"],
+      ...c.lojas.map(l=>[l.id,l.name,l.dono,kwhDe(l.id)??"",l.luz,l.ajuste,l.rateavel,l.total]),
+      ["Total","","","",c.luz,c.ajuste,c.bolo,c.total],[],
+      ["2. Rateio entre os condomínios"],
+      ["Condomínio","Percentual","Luz das próprias lojas","Ajuste","Parte do percentual do faturamento","Valor do repasse"],
+      ...c.partes.map(pt=>[pt.nome,fmtPctR(pt.pct),pt.luz,pt.ajuste,pt.parte,pt.valor]),
+      ["Total","100%",c.luz,c.ajuste,c.bolo,c.total]];
+    const w1=XLSX.utils.aoa_to_sheet(pag);
+    w1["!cols"]=[{wch:12},{wch:52},{wch:12},{wch:20},{wch:20},{wch:28},{wch:14},{wch:10},{wch:16},{wch:18},{wch:14}];
+    const w2=XLSX.utils.aoa_to_sheet(mem);
+    w2["!cols"]=[{wch:40},{wch:34},{wch:36},{wch:14},{wch:14},{wch:34},{wch:26},{wch:18}];
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,w1,"Divisão");XLSX.utils.book_append_sheet(wb,w2,"Memória de cálculo");
+    XLSX.writeFile(wb,`rateio_${g.nome.replace(/\s+/g,"_")}_${(period||"periodo").replace(/\s+/g,"_")}.xlsx`);
+    audit("Exportou rateio",{entidade:"rateio",entidade_nome:g.nome,periodo_nome:period||"",
+      descricao:c.partes.map(pt=>`${pt.nome}: ${fmt(pt.valor)}`).join(" | ")});
+  }
+
+  // PDF para enviar ao condomínio: abre uma janela pronta para imprimir / "Salvar como PDF".
+  // Não mostra o preço do kWh (só consumo e valor), a pedido.
+  function gerarPdf(g,c){
+    const temAj=Math.abs(c.ajuste)>0.004;
+    const conta=p=>p?[p.bank_banco,p.bank_agencia&&("agência "+p.bank_agencia),p.bank_conta&&("conta "+p.bank_conta)].filter(Boolean).join(" · "):"";
+    const cnpj=p=>p?(p.bank_cnpj_cond||p.bank_cnpj||""):"";
+    const regra=c.partes.map(pt=>`<b>${fmtPctR(pt.pct)}</b> para ${escH(pt.nome)}`).join(", ");
+    const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Rateio ${escH(g.nome)} ${escH(period||"")}</title><style>
+@page{size:A4;margin:13mm 14mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#1d2733;font-size:10.5pt;line-height:1.45}
+header{border-bottom:3px solid #00314f;padding-bottom:9px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+.hd{display:flex;align-items:center;gap:14px}.lg{width:38mm;height:18mm;overflow:hidden;position:relative;flex:none}.lg img{position:absolute;height:50mm;left:-4.5mm;top:-14.5mm}h1{font-size:19pt;margin:0;color:#00314f}
+.sub{color:#5d6b7a;font-size:9.8pt;margin-top:3px}.dir{text-align:right;font-size:8.8pt;color:#7a8794;line-height:1.55}
+h2{font-size:11pt;margin:0 0 7px;color:#00314f;text-transform:uppercase;letter-spacing:.7px}section{margin-bottom:13px;break-inside:avoid}
+.intro{background:#f4f7fa;border-radius:6px;padding:8px 14px;font-size:9.8pt;color:#2b3a4a}.intro b{color:#00314f}
+table{width:100%;border-collapse:collapse;font-size:10pt}
+th{background:#eef2f6;color:#00314f;text-align:right;padding:7px 10px;font-size:8.3pt;text-transform:uppercase;letter-spacing:.4px;border-bottom:2px solid #00314f}
+th.l,td.l{text-align:left}td{padding:6px 10px;border-bottom:1px solid #e6ebf0;text-align:right;white-space:nowrap}td.w{white-space:normal}td.d{min-width:44mm;font-size:9.4pt}td.n{min-width:54mm}
+td small{color:#8492a0;font-size:8.6pt;margin-left:5px}
+tr.tot td{border-top:2px solid #00314f;border-bottom:0;font-weight:bold;color:#00314f;font-size:11pt;background:#fff7ec}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}.card{border:1px solid #d8dee6;border-radius:8px;overflow:hidden;break-inside:avoid}
+.top{background:#00314f;color:#fff;padding:9px 14px}.top .n{font-size:11.5pt;font-weight:bold;line-height:1.25}.top .c{font-size:8.8pt;opacity:.8;margin-top:2px}
+.lin{display:flex;justify-content:space-between;align-items:baseline;padding:8px 14px;border-bottom:1px solid #eef1f5}
+.lin span{color:#44525f}.lin small{color:#8492a0;font-size:8.6pt;margin-left:5px}.lin b{font-weight:normal;white-space:nowrap}
+.lin.tt{background:#fff7ec;border-bottom:0}.lin.tt span{font-weight:bold;color:#00314f}.lin.tt b{font-weight:bold;color:#00314f;font-size:14pt}
+.bot{border-top:1px solid #e6ebf0;background:#f9fbfc;padding:8px 14px;font-size:9pt;color:#5d6b7a;line-height:1.5}.bot b{color:#1d2733}
+.obs{font-size:8.8pt;color:#6b7785;margin-top:6px}
+footer{margin-top:14px;border-top:1px solid #d8dee6;padding-top:8px;font-size:8.2pt;color:#8c98a4;display:flex;justify-content:space-between}
+</style></head><body>
+<header><div class="hd"><div class="lg"><img src="${LOGO_SVG}" alt="Roda"></div><div><h1>Rateio do repasse</h1><div class="sub"><b>${escH(g.nome)}</b></div></div></div>
+<div class="dir">Referência: ${escH(period||"")}${ciclo?"<br>Ciclo de "+ciclo:""}<br>Emitido em ${new Date().toLocaleDateString("pt-BR")}</div></header>
+<section><div class="intro">O repasse tem duas partes. O <b>reembolso de luz</b> vai inteiro para o condomínio dono de cada loja. O <b>percentual do faturamento</b> das lojas é somado e dividido: ${regra}.</div></section>
+<section><h2>1. Repasse apurado por loja</h2><table>
+<tr><th class="l">Loja</th><th class="l">Condomínio</th><th>Reembolso de luz</th>${temAj?"<th>Ajuste</th>":""}<th>Percentual do faturamento</th><th>Repasse da loja</th></tr>
+${c.lojas.map(l=>`<tr><td class="l w n">${escH(l.name)} <small>${escH(l.id)}</small></td><td class="l w d">${escH(l.dono)}</td><td>${fmt(l.luz)}${kwhDe(l.id)?` <small>${kwhDe(l.id)} kWh</small>`:""}</td>${temAj?`<td>${fmt(l.ajuste)}</td>`:""}<td>${fmt(l.rateavel)}</td><td>${fmt(l.total)}</td></tr>`).join("")}
+<tr class="tot"><td class="l" colspan="2">Total</td><td>${fmt(c.luz)}</td>${temAj?`<td>${fmt(c.ajuste)}</td>`:""}<td>${fmt(c.bolo)}</td><td>${fmt(c.total)}</td></tr></table></section>
+<section><h2>2. Valor de cada condomínio</h2><div class="cards">
+${c.partes.map(pt=>`<div class="card"><div class="top"><div class="n">${escH(pt.nome)}</div>${cnpj(pt.ref)?`<div class="c">CNPJ ${escH(cnpj(pt.ref))}</div>`:""}</div>
+<div class="lin"><span>Reembolso de luz <small>${pt.lojas.length} loja${pt.lojas.length>1?"s":""}</small></span><b>${fmt(pt.luz)}</b></div>
+${temAj?`<div class="lin"><span>Ajuste</span><b>${fmt(pt.ajuste)}</b></div>`:""}
+<div class="lin"><span>Percentual do faturamento<br><small style="margin-left:0">${fmtPctR(pt.pct)} de ${fmt(c.bolo)}</small></span><b>${fmt(pt.parte)}</b></div>
+<div class="lin tt"><span>Valor do repasse</span><b>${fmt(pt.valor)}</b></div>
+${conta(pt.ref)?`<div class="bot"><b>Conta para crédito</b><br>${escH(conta(pt.ref))}</div>`:""}</div>`).join("")}
+</div><div class="obs">A soma dos valores (${fmt(c.total)}) é igual ao total apurado nas lojas.</div></section>
+<footer><span>Roda Conveniência · contato@rodaconveniencia.com.br</span><span>${escH(g.nome)} · ${escH(period||"")}</span></footer>
+</body></html>`;
+    const w=window.open("","_blank");
+    if(!w){alert("O navegador bloqueou a janela do PDF. Libere pop-ups para este site e tente de novo.");return;}
+    w.document.write(html);w.document.close();w.focus();setTimeout(()=>{try{w.print();}catch{}},500);
+    audit("Gerou PDF de rateio",{entidade:"rateio",entidade_nome:g.nome,periodo_nome:period||""});
+  }
+
+  const erro=erroEd();
+  const th={textAlign:"right"}, num={textAlign:"right",fontVariantNumeric:"tabular-nums"};
+  return <div className="fade-in">
+    {confirm&&<ConfirmModal msg={confirm.msg} detail={confirm.detail} onConfirm={confirm.onConfirm} onCancel={()=>setConfirm(null)}/>}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+      <div className="h2">Rateio entre condomínios</div>
+      {!ed&&<button className="btn btn-p" onClick={()=>abrir(null)}>+ Novo grupo</button>}
+    </div>
+    <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:16}}>Período: <strong>{period||"Não definido"}</strong>{ciclo&&<> · ciclo {ciclo}</>}.
+      A luz de cada loja fica com o condomínio dono dela; só o percentual do faturamento do grupo é somado e dividido. O Financeiro já mostra uma linha por condomínio, com o valor dividido.</div>
+
+    {ed&&<div className="card" style={{marginBottom:16,border:"1.5px solid var(--accent)"}}>
+      <div className="h3" style={{marginBottom:10}}>{ed.id?"Editar grupo":"Novo grupo de rateio"}</div>
+      <div style={{display:"flex",gap:12,alignItems:"flex-end",flexWrap:"wrap",marginBottom:10}}>
+        <div className="field" style={{flex:1,minWidth:240,marginBottom:0}}><label>Nome do grupo</label>
+          <input value={ed.nome} placeholder="Ex.: Jardim Botafogo" onChange={e=>setEd(o=>({...o,nome:e.target.value}))}/></div>
+        <label style={{fontSize:12,display:"flex",alignItems:"center",gap:6,paddingBottom:8}}>
+          <input type="checkbox" style={{width:"auto"}} checked={ed.ativo} onChange={e=>setEd(o=>({...o,ativo:e.target.checked}))}/> Grupo ativo</label>
+      </div>
+      {ed.beneficiarios.map((b,i)=><div key={i} style={{border:"1px solid var(--color-border-tertiary,#e5e5e5)",borderRadius:8,padding:10,marginBottom:8}}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap"}}>
+          <div className="field" style={{flex:1,minWidth:240,marginBottom:0}}><label>Condomínio que recebe</label>
+            <input value={b.nome} placeholder="Ex.: Condomínio Highlight Jardim Botafogo" onChange={e=>setB(i,{nome:e.target.value})}/></div>
+          <div className="field" style={{width:130,marginBottom:0}}><label>Percentual (%)</label>
+            <input value={b.pctTxt} placeholder="0" inputMode="decimal" onChange={e=>setB(i,{pctTxt:e.target.value.replace(/[^0-9.,]/g,"")})}/></div>
+          {ed.beneficiarios.length>2&&<button className="btn btn-s" onClick={()=>setEd(o=>({...o,beneficiarios:o.beneficiarios.filter((_,j)=>j!==i)}))}>Remover</button>}
+        </div>
+        <div style={{marginTop:8,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+          <span style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)"}}>LOJAS DESTE CONDOMÍNIO:</span>
+          {b.lojas.map((l,k)=><span key={l} className="chip" title={k===0?"A conta bancária usada no pagamento é a do cadastro desta loja":""}>{l} · {nomePdv(l)}{k===0?" (conta)":""}
+            <span style={{marginLeft:6,cursor:"pointer",fontWeight:700}} onClick={()=>setB(i,{lojas:b.lojas.filter(x=>x!==l)})}>×</span></span>)}
+          <select value="" style={{width:260}} onChange={e=>{if(e.target.value)setB(i,{lojas:[...b.lojas,e.target.value]});}}>
+            <option value="">+ adicionar loja…</option>
+            {livres.map(p=><option key={p.id} value={String(p.id)}>{p.name} ({p.id})</option>)}
+          </select>
+        </div>
+      </div>)}
+      <div style={{fontSize:11,color:"var(--color-text-tertiary,#888)",marginBottom:10}}>O pagamento de cada condomínio vai para a conta cadastrada na primeira loja da lista dele (marcada com "conta").</div>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <button className="btn btn-s" onClick={()=>setEd(o=>({...o,beneficiarios:[...o.beneficiarios,{nome:"",pctTxt:"",lojas:[]}]}))}>+ Condomínio</button>
+        <div style={{flex:1}}/>
+        {erro&&<span style={{fontSize:12,color:"var(--red,#f2401a)",fontWeight:600}}>{erro}</span>}
+        <button className="btn btn-s" onClick={()=>setEd(null)}>Cancelar</button>
+        <button className="btn btn-p" disabled={!!erro||busy} style={erro||busy?{opacity:0.5,cursor:"not-allowed"}:undefined} onClick={salvar}>{busy?"Salvando…":"Salvar grupo"}</button>
+      </div>
+    </div>}
+
+    {(rateios||[]).length===0&&!ed&&<div className="card empty">Nenhum grupo de rateio cadastrado.</div>}
+    {(rateios||[]).map(g=>{const c=calcRateio(g,results,pdvs);const inativo=g.ativo===false;
+      return <div key={g.id} className="card" style={{marginBottom:16,opacity:inativo?0.6:1}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10}}>
+          <div className="h3" style={{margin:0}}>{g.nome} {inativo&&<span className="badge badge-warn" style={{marginLeft:6}}>inativo</span>}</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {c.ok&&<button className="btn btn-p" onClick={()=>gerarPdf(g,c)}>🖨 PDF para o condomínio</button>}
+            {c.ok&&<button className="btn btn-o" onClick={()=>exportar(g,c)}>⬇ Planilha</button>}
+            <button className="btn btn-s" onClick={()=>abrir(g)}>✎ Editar</button>
+            <button className="btn btn-s" onClick={()=>excluir(g)}>Excluir</button>
+          </div>
+        </div>
+        {!c.pctOk&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg,#fff4e5)",color:"#92400e",fontSize:12,marginBottom:10}}>Os percentuais deste grupo não somam 100%. Edite o grupo para corrigir; enquanto isso o rateio não é aplicado.</div>}
+        {c.faltando.length>0&&<div style={{padding:"8px 12px",borderRadius:8,background:"var(--orange-bg,#fff4e5)",color:"#92400e",fontSize:12,marginBottom:10}}>
+          Sem valor calculado neste período para: {c.faltando.map(f=>`${f.name} (${f.id})`).join(", ")}. Enquanto faltar, o rateio não é aplicado e as lojas aparecem separadas no Financeiro.</div>}
+        {c.lojas.length>0&&<div className="scroll-x"><table style={{marginBottom:12}}>
+          <thead><tr><th>Id</th><th>Loja</th><th>Condomínio dono</th><th style={th}>Luz</th><th style={th}>Ajuste</th><th style={th}>Percentual do faturamento</th><th style={th}>Repasse da loja</th></tr></thead>
+          <tbody>{c.lojas.map(l=><tr key={l.id}>
+            <td className="mono" style={{fontSize:11}}>{l.id}</td><td style={{fontWeight:500}}>{l.name}</td><td style={{fontSize:12}}>{l.dono}</td>
+            <td className="mono" style={num}>{fmt(l.luz)}{kwhDe(l.id)?<span style={{fontSize:10,color:"var(--color-text-tertiary,#888)",marginLeft:6}}>{kwhDe(l.id)} kWh</span>:null}</td>
+            <td className="mono" style={num}>{fmt(l.ajuste)}</td><td className="mono" style={num}>{fmt(l.rateavel)}</td><td className="mono" style={num}>{fmt(l.total)}</td></tr>)}
+            <tr style={{fontWeight:700,borderTop:"2px solid var(--color-border-secondary)"}}><td colSpan={3}>Total</td>
+              <td className="mono" style={num}>{fmt(c.luz)}</td><td className="mono" style={num}>{fmt(c.ajuste)}</td><td className="mono" style={num}>{fmt(c.bolo)}</td><td className="mono" style={num}>{fmt(c.total)}</td></tr>
+          </tbody></table></div>}
+        <div className="scroll-x"><table>
+          <thead><tr><th>Condomínio</th><th style={th}>Percentual</th><th style={th}>Luz das próprias lojas</th><th style={th}>Ajuste</th><th style={th}>Parte do percentual</th><th style={{...th,background:"var(--accent-bg)"}}>Valor do repasse</th><th>Conta</th></tr></thead>
+          <tbody>{c.partes.map((pt,i)=><tr key={i}>
+            <td style={{fontWeight:500}}>{pt.nome}</td><td className="mono" style={num}>{fmtPctR(pt.pct)}</td>
+            <td className="mono" style={num}>{fmt(pt.luz)}</td><td className="mono" style={num}>{fmt(pt.ajuste)}</td><td className="mono" style={num}>{fmt(pt.parte)}</td>
+            <td className="mono" style={{...num,fontWeight:700,background:"var(--accent-bg)",color:"var(--accent)"}}>{fmt(pt.valor)}</td>
+            <td style={{fontSize:11}}>{pt.ref?[pt.ref.bank_name,pt.ref.bank_banco,pt.ref.bank_agencia,pt.ref.bank_conta].filter(Boolean).join(" · ")||"sem dados bancários":"loja não cadastrada"}</td></tr>)}
+            <tr style={{fontWeight:700,borderTop:"2px solid var(--color-border-secondary)"}}><td>Total</td><td className="mono" style={num}>{fmtPctR(c.partes.reduce((s,x)=>s+x.pct,0))}</td>
+              <td className="mono" style={num}>{fmt(c.luz)}</td><td className="mono" style={num}>{fmt(c.ajuste)}</td><td className="mono" style={num}>{fmt(c.bolo)}</td>
+              <td className="mono" style={{...num,background:"var(--accent-bg)",color:"var(--accent)"}}>{fmt(c.partes.reduce((s,x)=>s+x.valor,0))}</td><td/></tr>
+          </tbody></table></div>
+      </div>;})}
   </div>;
 }
 
@@ -4642,6 +4938,7 @@ export default function App() {
   const [pdvs,setPdvs]=useState([]);
   const [md,setMd]=useState({});
   const [results,setResults]=useState([]);
+  const [rateios,setRateios]=useState([]); // grupos de rateio (tabela rateio_grupos)
   const [activePeriod,setActivePeriod]=useState(null);
   const [allPeriods,setAllPeriods]=useState([]);
   const [ready,setReady]=useState(false);
@@ -4727,6 +5024,7 @@ export default function App() {
         setLoadMsg("Carregando períodos...");
         const periods=await SB.loadPeriods();
         setAllPeriods(periods);
+        try{setRateios(await SB.loadRateios()||[]);}catch(e){console.error("loadRateios",e);}
 
         // Prefer "aberto", fallback to most recent
         const sorted=[...periods].sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes));
@@ -5337,7 +5635,10 @@ export default function App() {
           savePdvs={canEdit?savePdvsToSB:noSave} saveMd={canEdit?saveMdToSB:noSave} onDirty={setDirty}
           userRole={userRole} isLocked={isLocked} onRequestChange={async(r)=>{try{await SB.createChangeRequest(r);}catch(e){throw e;}}}/>}
         {page==="fin"&&<Financeiro pdvs={pdvs} setPdvs={canEdit?setPdvs:noSave} results={results} period={period}
-          savePdvs={canEdit?savePdvsToSB:noSave} onDirty={setDirty}/>}
+          savePdvs={canEdit?savePdvsToSB:noSave} onDirty={setDirty} rateios={rateios}/>}
+        {page==="rateio"&&canEdit&&<Rateio pdvs={pdvs} results={results} md={md} period={period} activePeriod={activePeriod}
+          rateios={rateios} userRole={userRole}
+          onReload={async()=>{try{setRateios(await SB.loadRateios()||[]);}catch(e){console.error("loadRateios",e);}}}/>}
         {page==="disparo"&&<DisparoEmail pdvs={pdvs} md={md} period={period} activePeriod={activePeriod}/>}
       </div>
     </div>
